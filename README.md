@@ -48,7 +48,7 @@
 - 约 **2 GB** 磁盘（代码 5 MB + 数据 263 MB + 运行产物若干）
 - 能访问公网（仅首次拉数据时需要，之后出信号可完全离线）
 
-### 五步跑通
+### 六步跑通
 
 ```bash
 # 1. 取代码
@@ -63,12 +63,16 @@ source .venv/bin/activate          # macOS / Linux
 # 3. 装依赖（5 个包，无 web 框架、无深度学习框架）
 pip install -r requirements.txt
 
-# 4. 准备数据（357 MB，在同一个下载页，见下节）
-#    解压到与 ashare_quant 同级的 data_extract/was_stock_data_ext/
+# 4. 准备数据（368 MB，在 Releases 里，见下节）
+#    在 ashare_quant 的【上一级目录】解压：会生成 data_extract/was_stock_data
+#    和 ashare_quant/build/altdata（可转债数据）
 
-# 5. 自检 + 出信号
+# 5. 自检
 python tools/check_env.py          # 28 项检查，全 [OK] 才能继续
-python scripts/daily_signal.py --four
+
+# 6. 出信号（先转债腿，再四腿合成）
+python scripts/cb_signal.py        # 约 40 秒
+python scripts/daily_signal.py --four   # 约 70 秒
 ```
 
 `daily_signal.py --four` 会输出四腿完整方案到 `signals/latest_combo.json` 和
@@ -91,15 +95,15 @@ python scripts/daily_signal.py --four
 
 | 附件 | 大小 | 说明 |
 |---|---:|---|
-| `was_data_full.zip` | 357 MB | **推荐**。全量，含行情面板，解压即用，不用联网 |
-| `was_data_light.zip` | 61 MB | 网络慢就用这个：只含免费接口拿不到的部分，行情自己拉（约 20 分钟） |
+| `was_data_full.zip` | 368 MB | **推荐**。全量，含行情面板与可转债数据，解压即用，不用联网 |
+| `was_data_light.zip` | 72 MB | 网络慢就用这个：只含免费接口拿不到的部分，行情自己拉（约 20 分钟） |
 
-解压到 `<工作目录>/data_extract/was_stock_data_ext/`，然后回到第 5 步自检。
-校验值（`md5sum` / `certutil -hashfile x.zip MD5`）：
+在 `ashare_quant` 的**上一级目录**解压（zip 内部已带 `data_extract/` 与 `ashare_quant/build/` 前缀），
+然后回到第 5 步自检。校验值（`md5sum` / `certutil -hashfile x.zip MD5`）：
 
 ```
-was_data_full.zip   db16dcc9bcdff0e116e0d08870467484
-was_data_light.zip  33fbae9eb0ecc139f559f02b8a78fa14
+was_data_full.zip   9faa0dbc6b910b09cf3a917437f64484
+was_data_light.zip  3387863601b5ae678417ca5bba6a8c97
 ```
 
 ### 为什么不能全靠自己拉
@@ -131,8 +135,9 @@ python tools/fetch_data_full.py --workers 16     # 约 20 分钟，支持断点�
 ```
 <你的工作目录>/
 ├── ashare_quant/                  ← 本仓库
+│   └── build/altdata/             ← 可转债面板（数据包附带，2 个 parquet）
 └── data_extract/
-    └── was_stock_data_ext/        ← 数据放这里
+    └── was_stock_data/            ← 行情与参考数据放这里
         ├── panel_ohlcv.npz
         ├── raw_close.npz
         ├── market_cap.npz
@@ -149,7 +154,10 @@ python tools/fetch_data_full.py --workers 16     # 约 20 分钟，支持断点�
 ## 常用命令
 
 ```bash
-# 出信号（四腿完整方案，约 100 秒）
+# 可转债腿信号（每天先跑这个，约 40 秒；不跑第四腿会是空的）
+python scripts/cb_signal.py
+
+# 出信号（四腿完整方案，约 70 秒）
 python scripts/daily_signal.py --four
 
 # 只出主策略（40 只）
