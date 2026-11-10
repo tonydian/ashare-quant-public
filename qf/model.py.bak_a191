@@ -1,0 +1,725 @@
+# -*- coding: utf-8 -*-
+"""因子选择 / 权重估计 / 复合打分（walk-forward）。
+
+方法论（与 docs/ARCH.md 铁律一致）：
+1. 候选池：只用开发期（2017-01-03 ~ 2019-12-31）的周频 ICIR + 覆盖率 + 相关性剪枝
+   + 因子族配额选出 K 个因子（固定池，避免全样本挑选）；
+2. 权重：从验证期起点（2020-01）开始，每 13 周用**截至当时的滚动 3 年**周频数据
+   重新估计（ICIR 加权 + 岭回归 50/50 混合），标签只用到 refit 时点已知的周；
+3. 复合打分：Σ_k w_k · 中性化横截面 z-score(factor_k)，再对复合分做行业+市值中性化；
+4. 输出 (T,N) 打分矩阵（仅周频行有值），供 qf.backtest.run_backtest 使用。
+
+防未来函数要点：
+- 特征 = t 日收盘可得的因子值，横截面排名/中性化只用 t 日截面信息；
+- 权重只用 refit 时点之前已实现标签的周（滞后 2 周）；
+- 候选池只用 DEV 期（<2020）信息。
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+
+import numpy as np
+import pandas as pd
+
+from . import config as C
+from . import ops
+
+
+# ------------------------------------------------------------------ 配置
+@dataclass
+class ModelConfig:
+    horizon: int = C.FWD_HORIZON
+    train_weeks: int = 156          # 3 年
+    refit_weeks: int = 12           # 季度（月份季度起点 + 最小间隔 12 周，避免季度被跳过）
+    max_factors: int = C.MAX_FACTORS
+    corr_max: float = 0.70
+    max_per_category: int = 4
+    min_coverage: float = 0.90
+    min_ic_obs: int = 80
+    neutralize: bool = True
+    method: str = "blend"           # icir / ridge / blend
+    ridge_alpha_rel: float = 1.0e-3
+    icir_clip: float = 3.0
+    weight_floor: float = 0.05      # 权重绝对值 < max*floor 置 0
+    score_smooth_alpha: float = 0.6  # 复合分时序平滑：α·当期 + (1-α)·上期（只用过去信息）
+    universe: str | None = None     # 可选选股域过滤：above_ma60 / above_ma60_slope / above_ma200
+    fdr_q: float | None = None      # BH-FDR 控制水平（None=不启用；0.05 推荐）：多因子筛选假阳性控制
+    # ---- 因子池缓冲（防抖动）：见 qf/pool_guard.py
+    pool_guard: bool = False        # 启用"连续确认 + 双阈值"缓冲
+    pool_prev: list | None = None   # 上一次的因子池（None=首次构建）
+    pool_state: dict = field(default_factory=dict)  # 跨次 streak 状态
+    pool_need_streak: int = 2       # 连续几次重估才动作
+    pool_entry_rank: int | None = None   # 新因子入场线（None=按 k*0.75）
+    pool_exit_rank: int | None = None    # 旧因子退出线（None=按 k*1.25）
+
+# ModelConfig 的声明字段（供 load_result 过滤旧版的临时属性）
+_MODEL_CFG_FIELDS = set(ModelConfig.__dataclass_fields__.keys())
+
+
+
+# ------------------------------------------------------------------ 横截面工具
+def cs_rank_rows(panel: np.ndarray, rows: np.ndarray, mask: np.ndarray | None = None,
+                 clip: float = 5.0) -> np.ndarray:
+    """对 panel (T,N) 的指定行做横截面 rank → [-0.5,0.5]；无效/未选 mask 为 NaN。
+
+    mask 支持两种形状：与 panel 同形的 (T,N)（用 rows 索引），或与 rows 对齐的
+    (len(rows), N)（用局部下标索引）。
+    """
+    n = len(rows)
+    out = np.full((n, panel.shape[1]), np.nan, dtype=np.float32)
+    mask_rowwise = mask is not None and mask.shape[0] == n
+    for i, t in enumerate(rows):
+        x = panel[t]
+        valid = np.isfinite(x)
+        if mask is not None:
+            valid &= mask[i] if mask_rowwise else mask[t]
+        cnt = int(valid.sum())
+        if cnt < 10:
+            continue
+        idx = np.flatnonzero(valid)
+        order = np.argsort(x[idx], kind="stable")
+        r = np.empty(cnt, dtype=np.float64)
+        r[order] = np.arange(cnt, dtype=np.float64)
+        out[i, idx] = (r / (cnt - 1) - 0.5).astype(np.float32)
+    return out
+
+
+def neutralize_rows(X: np.ndarray, industry: np.ndarray, size: np.ndarray,
+                    mask: np.ndarray) -> np.ndarray:
+    """逐行做 行业均值 + log 市值 线性中性化；返回残差（NaN 保持）。"""
+    n, N = X.shape
+    out = np.full_like(X, np.nan)
+    for i in range(n):
+        m = mask[i] & np.isfinite(X[i])
+        if m.sum() < 20:
+            continue
+        f = X[i].astype(np.float64).copy()
+        ind = industry[i]
+        sz = size[i]
+        fm = f[m]
+        # 行业去均值
+        codes = ind[m]
+        order = np.argsort(codes, kind="stable")
+        cs = codes[order]
+        starts = np.flatnonzero(np.r_[True, cs[1:] != cs[:-1]])
+        ends = np.r_[starts[1:], len(cs)]
+        fclean = f.copy()
+        vals = fm[order]
+        for s, e in zip(starts, ends):
+            sel = order[s:e]
+            fclean[np.flatnonzero(m)[sel]] -= vals[s:e].mean()
+        # 市值回归（在选股域内）
+        s_ok = m & np.isfinite(sz)
+        if s_ok.sum() > 30:
+            ss = sz[s_ok].astype(np.float64)
+            ss = ss - ss.mean()
+            ff = fclean[s_ok]
+            denom = float(np.dot(ss, ss))
+            if denom > 1e-12:
+                beta = float(np.dot(ss, ff)) / denom
+                fclean[s_ok] -= beta * ss
+        out[i] = fclean.astype(np.float32)
+    return out
+
+
+def zscore_rows(X: np.ndarray, mask: np.ndarray, clip: float = 5.0) -> np.ndarray:
+    """逐行 z-score（选股域内），NaN/域外为 NaN。"""
+    out = np.full_like(X, np.nan)
+    valid = mask & np.isfinite(X)
+    n = valid.sum(axis=1).astype(np.float64)
+    x = np.where(valid, X, 0.0).astype(np.float64)
+    mean = x.sum(axis=1) / np.maximum(n, 1)
+    var = (np.where(valid, (x - mean[:, None]) ** 2, 0.0)).sum(axis=1) / np.maximum(n - 1, 1)
+    sd = np.sqrt(np.maximum(var, 1e-12))
+    z = np.where(valid, (x - mean[:, None]) / sd[:, None], np.nan)
+    return np.clip(z, -clip, clip).astype(np.float32)
+
+
+def build_feature_block(md, rows: np.ndarray, panels: dict, key: str,
+                        mask: np.ndarray) -> np.ndarray:
+    """单个因子 → (n_rows, N) 的中性化 z-score 特征。"""
+    raw = panels[key]  # (n_rows, N)，与 rows 对齐
+    r = cs_rank_rows(raw, np.arange(len(rows)), mask=mask)
+    if np.isfinite(r).sum() == 0:
+        return r
+    if ModelConfig.neutralize:
+        r = neutralize_rows(r, md.industry[rows], md.logmcap[rows], mask)
+    r = zscore_rows(r, mask)
+    return r
+
+
+# ------------------------------------------------------------------ 候选池
+def weekly_ic(feat: np.ndarray, label: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """逐周 Rank IC（feat/label 已是横截面 rank 或连续值）。"""
+    valid = mask & np.isfinite(feat) & np.isfinite(label)
+    n = valid.sum(axis=1).astype(np.float64)
+    f = np.where(valid, feat, 0.0).astype(np.float64)
+    y = np.where(valid, label, 0.0).astype(np.float64)
+    mf = f.sum(axis=1) / np.maximum(n, 1)
+    my = y.sum(axis=1) / np.maximum(n, 1)
+    cov = (np.where(valid, (f - mf[:, None]) * (y - my[:, None]), 0.0)).sum(axis=1) / np.maximum(n, 1)
+    vf = (np.where(valid, (f - mf[:, None]) ** 2, 0.0)).sum(axis=1) / np.maximum(n, 1)
+    vy = (np.where(valid, (y - my[:, None]) ** 2, 0.0)).sum(axis=1) / np.maximum(n, 1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ic = cov / np.sqrt(vf * vy)
+    ic = np.where((n >= 100) & np.isfinite(ic), ic, np.nan)
+    return ic
+
+
+def dev_metrics(feat: np.ndarray | None, label: np.ndarray, mask: np.ndarray) -> dict:
+    ic = weekly_ic(feat, label, mask) if feat is not None else np.array([])
+    ic = ic[np.isfinite(ic)]
+    if len(ic) == 0:
+        return {"ic": 0.0, "icir": 0.0, "t": 0.0, "pos": 0.0, "n": 0}
+    m, s = float(np.mean(ic)), float(np.std(ic))
+    return {"ic": m, "icir": m / s if s > 1e-12 else 0.0,
+            "t": m / s * np.sqrt(len(ic)) if s > 1e-12 else 0.0,
+            "pos": float(np.mean(ic > 0)), "n": int(len(ic))}
+
+
+def select_pool(md, rows_dev: np.ndarray, panels_dev: dict, label_dev: np.ndarray,
+                mask_dev: np.ndarray, cfg: ModelConfig, catalog: pd.DataFrame,
+                verbose: bool = True) -> tuple[list[str], pd.DataFrame]:
+    """开发期候选池选择：|ICIR| 排序 + 相关性剪枝 + 族配额。"""
+    keys = list(panels_dev.keys())
+    feats = {}
+    metrics = []
+    for k in keys:
+        f = build_feature_block(md, rows_dev, panels_dev, k, mask_dev)
+        met = dev_metrics(f, label_dev, mask_dev)
+        met["factor_key"] = k
+        metrics.append(met)
+        feats[k] = f
+    metdf = pd.DataFrame(metrics).set_index("factor_key")
+    metdf["abs_icir"] = metdf["icir"].abs()
+    cat = catalog.set_index("factor_key")
+    metdf["category"] = cat["category_en"].reindex(metdf.index)
+    metdf["lib"] = cat["lib"].reindex(metdf.index)
+    metdf["base"] = cat["base"].reindex(metdf.index)
+    metdf = metdf.sort_values("abs_icir", ascending=False)
+
+    # ---- BH-FDR：控制"800 因子筛 34 个"的多重检验假阳性（cfg.fdr_q=None 时不启用，保持向后兼容）
+    if getattr(cfg, "fdr_q", None) is not None:
+        from .stats_adjust import bh_fdr, p_value_two_sided
+        n_obs = metdf["n"].to_numpy(dtype=np.float64)
+        icir = metdf["icir"].to_numpy(dtype=np.float64)
+        tstat = icir * np.sqrt(np.maximum(n_obs, 1.0))
+        pvals = np.array([p_value_two_sided(t) for t in tstat])
+        fdr = bh_fdr(pvals, q=float(cfg.fdr_q))
+        n_before = int((metdf["n"] >= cfg.min_ic_obs).sum())
+        metdf = metdf.loc[fdr["reject"]]
+        if verbose:
+            print(f"[pool] BH-FDR(q={cfg.fdr_q}) 剔除 {n_before - len(metdf)} 个不显著因子，"
+                  f"保留 {len(metdf)} 个（原始 {n_before}）")
+        if metdf.empty:
+            raise ValueError("BH-FDR 后无因子通过，请放宽 fdr_q 或检查 DEV 期标签")
+
+    # 逐周横截面相关矩阵（只算强候选，控制计算量）
+    cand = metdf[(metdf["n"] >= cfg.min_ic_obs)].index.tolist()
+    cand = cand[: min(120, len(cand))]
+    corr = None
+    if len(cand) >= 2:
+        F = np.stack([feats[k] for k in cand], axis=0)  # (K, n, N)
+        valid = mask_dev[None, :, :] & np.isfinite(F)
+        Fz = np.where(valid, F, 0.0).astype(np.float32)
+        nvalid = valid.sum(axis=2).astype(np.float32)  # (K, n)
+        # 逐因子按周标准化：用 einsum 累加 Σf_k f_l / n
+        G = np.einsum("kwn,lwn->kl", Fz, Fz, optimize=True)
+        cnt = np.maximum(nvalid.mean(axis=1), 1.0)
+        corr = G / (cnt[:, None] * cnt[None, :])
+        corr = np.clip(corr, -1, 1)
+        np.fill_diagonal(corr, 1.0)
+
+    selected = []
+    cat_count: dict[str, int] = {}
+    for k in cand:
+        category = str(metdf.loc[k, "category"])
+        if cat_count.get(category, 0) >= cfg.max_per_category:
+            continue
+        if corr is not None and selected:
+            j = cand.index(k)
+            js = [cand.index(s) for s in selected]
+            if np.max(np.abs(corr[j, js])) > cfg.corr_max:
+                continue
+        selected.append(k)
+        cat_count[category] = cat_count.get(category, 0) + 1
+        if len(selected) >= cfg.max_factors:
+            break
+    if verbose:
+        print(f"[pool] 候选 {len(cand)}，选中 {len(selected)}；类别分布: {cat_count}")
+
+    # ---- 因子池缓冲（防抖动）：只在 cfg.pool_guard=True 时启用
+    guard_info = None
+    if getattr(cfg, "pool_guard", False) and selected:
+        from . import pool_guard as _pg
+        # ranked = 本次"无缓冲时"的选池结果 + 其余候选（按 |ICIR| 排序）
+        # 关键：selected 是经过了相关性剪枝与类别配额的结果，代表本次的"应然池"
+        #       其余候选按 |ICIR| 排在后面，供挤占时参考
+        _rest = [x for x in metdf.index if x not in set(selected)]
+        ranked = list(selected) + _rest
+        # 目标池大小：优先沿用上次池的大小（保持稳定），否则用 max_factors
+        _prev = list(getattr(cfg, "pool_prev", None) or [])
+        _k = len(_prev) if _prev else int(cfg.max_factors)
+        _k = min(_k, int(cfg.max_factors))
+        new_pool, _state_out, guard_info = _pg.apply_guard(
+            prev_pool=_prev or None,
+            ranked=ranked,
+            k=_k,
+            state=getattr(cfg, "pool_state", None) or {},
+            entry_rank=getattr(cfg, "pool_entry_rank", None),
+            exit_rank=getattr(cfg, "pool_exit_rank", None),
+            need_streak=int(getattr(cfg, "pool_need_streak", 2)),
+            verbose=verbose,
+        )
+        # 只保留能在 metdf 里取到指标的因子
+        new_pool = [x for x in new_pool if x in metdf.index]
+        if new_pool:
+            # ---- 重新施加类别配额（缓冲的挤占可能绕过上限）
+            _cat_of = {x: str(metdf.loc[x, "category"]) for x in metdf.index}
+            _rank_idx = {x: i for i, x in enumerate(ranked)}
+            _max_per = int(cfg.max_per_category)
+            _cnt: dict[str, int] = {}
+            _final: list[str] = []
+            _dropped: list[str] = []
+            for x in sorted(new_pool, key=lambda z: _rank_idx.get(z, 10 ** 6)):
+                c = _cat_of.get(x, "?")
+                if _cnt.get(c, 0) >= _max_per:
+                    _dropped.append(x)
+                    continue
+                _final.append(x)
+                _cnt[c] = _cnt.get(c, 0) + 1
+            # 补足到目标大小（从 ranked 里挑未超配额的）
+            if len(_final) < _k:
+                for x in ranked:
+                    if len(_final) >= _k:
+                        break
+                    if x in _final or x not in metdf.index:
+                        continue
+                    c = _cat_of.get(x, "?")
+                    if _cnt.get(c, 0) >= _max_per:
+                        continue
+                    _final.append(x)
+                    _cnt[c] = _cnt.get(c, 0) + 1
+            if _dropped and verbose:
+                print(f"[pool-guard] 类别配额回补：移除 {len(_dropped)} 个超配额因子")
+                print(f"  超配额被移除: {_dropped}")
+            if _final:
+                new_pool = _final
+                guard_info["category_fixed"] = _dropped
+                guard_info["cat_counts"] = _cnt
+        if new_pool:
+            selected = new_pool
+        # 把状态挂到 cfg 上，供调用方持久化
+        try:
+            cfg.pool_state_out = _state_out
+        except Exception:
+            pass
+
+    pool_meta = metdf.loc[selected].copy()
+    if guard_info is not None:
+        try:
+            pool_meta.attrs["guard"] = guard_info
+        except Exception:
+            pass
+    return selected, pool_meta
+
+
+# ------------------------------------------------------------------ 权重
+def fit_weights_icir(F: np.ndarray, y: np.ndarray, mask: np.ndarray,
+                     cfg: ModelConfig, strict: np.ndarray | None = None) -> np.ndarray:
+    """F: (K, n, N) 特征；y: (n,N)；返回 (K,) 权重。
+
+    ``strict`` 为 True 的因子（原有量价/动量因子）保持 NaN 语义；基本面因子允许缺失，
+    缺失按 0（中性）处理，避免因财报缺失把股票整行排除。
+    """
+    if strict is not None and (~strict).any():
+        F = F.copy()
+        F[~strict] = np.where(np.isfinite(F[~strict]), F[~strict], 0.0)
+    K = F.shape[0]
+    ic = np.stack([weekly_ic(F[k], y, mask) for k in range(K)], axis=0)  # (K, n)
+    m = np.nanmean(ic, axis=1)
+    s = np.nanstd(ic, axis=1)
+    w = np.where(s > 1e-12, m / s, 0.0)
+    w = np.clip(w, -cfg.icir_clip, cfg.icir_clip)
+    return w
+
+
+def fit_weights_ridge(F: np.ndarray, y: np.ndarray, mask: np.ndarray,
+                      cfg: ModelConfig, strict: np.ndarray | None = None) -> np.ndarray:
+    K, n, N = F.shape
+    if strict is None:
+        # 与 v1 完全一致：valid 为 (K,n,N)，要求所有因子在样本上都有限
+        valid = mask & np.isfinite(y)[None, :, :] & np.isfinite(F)
+    else:
+        # 非严格因子（基本面）缺失填 0；严格因子保持 NaN 并参与 valid 掩码
+        F = F.copy()
+        if (~strict).any():
+            F[~strict] = np.where(np.isfinite(F[~strict]), F[~strict], 0.0)
+        base = mask & np.isfinite(y)[None, :, :]
+        valid = np.broadcast_to(base, (K, n, N)).copy()
+        for k in range(K):
+            if strict[k]:
+                valid[k] &= np.isfinite(F[k])
+    # 逐周横截面 demean 后堆叠
+    Xs, ys = [], []
+    for w_i in range(n):
+        v = valid[:, w_i, :].T  # (N, K)
+        keep = v.all(axis=1)
+        if keep.sum() < 100:
+            continue
+        Xi = np.where(v, F[:, w_i, :].T, 0.0)
+        Xs.append(Xi[keep])
+        ys.append(y[w_i][keep])
+    if not Xs:
+        return np.zeros(K)
+    X = np.concatenate(Xs, axis=0).astype(np.float64)
+    Y = np.concatenate(ys, axis=0).astype(np.float64)
+    Y = Y - Y.mean()
+    XtX = X.T @ X
+    Xty = X.T @ Y
+    lam = cfg.ridge_alpha_rel * float(np.mean(np.diag(XtX))) * K
+    A = XtX + lam * np.eye(K)
+    try:
+        w = np.linalg.solve(A, Xty)
+    except np.linalg.LinAlgError:
+        w = np.linalg.pinv(A) @ Xty
+    return w
+
+
+def normalize_weights(w: np.ndarray, floor: float = 0.05) -> np.ndarray:
+    w = np.asarray(w, dtype=np.float64).copy()
+    mx = np.max(np.abs(w))
+    if mx < 1e-12:
+        return w
+    w[np.abs(w) < floor * mx] = 0.0
+    l1 = np.sum(np.abs(w))
+    if l1 > 1e-12:
+        w /= l1
+    return w
+
+
+def fit_weights(F: np.ndarray, y: np.ndarray, mask: np.ndarray, cfg: ModelConfig,
+                verbose: bool = False, strict: np.ndarray | None = None) -> np.ndarray:
+    if cfg.method == "icir":
+        w = normalize_weights(fit_weights_icir(F, y, mask, cfg, strict), cfg.weight_floor)
+    elif cfg.method == "ridge":
+        w = normalize_weights(fit_weights_ridge(F, y, mask, cfg, strict), cfg.weight_floor)
+    else:
+        a = normalize_weights(fit_weights_icir(F, y, mask, cfg, strict), cfg.weight_floor)
+        b = normalize_weights(fit_weights_ridge(F, y, mask, cfg, strict), cfg.weight_floor)
+        w = 0.5 * a + 0.5 * b
+        w = normalize_weights(w, cfg.weight_floor)
+    if verbose:
+        print(f"[weights] nonzero={int((np.abs(w)>0).sum())} sum|w|={np.abs(w).sum():.3f}")
+    return w
+
+
+# ------------------------------------------------------------------ 标签
+def weekly_label(md, rows: np.ndarray, mask_rows: np.ndarray, horizon: int,
+                 rank: bool = True) -> np.ndarray:
+    lab = md.fwd_open_ret(horizon)[rows]
+    # 标签要求 t+1 开盘可买（停牌/涨停/退市等不可执行样本从训练集中剔除，见 verifier P2#2）
+    buy = np.zeros_like(mask_rows, dtype=bool)
+    valid = rows + 1 < md.T
+    buy[valid] = md.buyable[rows[valid] + 1]
+    mask_rows = mask_rows & buy
+    if rank:
+        lab = cs_rank_rows(lab, np.arange(len(rows)), mask=mask_rows)
+    return np.where(mask_rows, lab, np.nan).astype(np.float32)
+
+
+# ------------------------------------------------------------------ walk-forward
+@dataclass
+class WalkForwardResult:
+    rows_weekly: np.ndarray
+    scores: np.ndarray                 # (T,N) 仅周频行有值
+    weights: pd.DataFrame              # refit_date, factor_key, weight
+    pool: list[str]
+    pool_meta: pd.DataFrame
+    composite_ic: pd.DataFrame         # 逐周 OOS IC
+    cfg: ModelConfig = field(default_factory=ModelConfig)
+
+
+def walk_forward(md, rows_weekly: np.ndarray, panels: dict, catalog: pd.DataFrame,
+                 cfg: ModelConfig | None = None, start_date: str | None = None,
+                 verbose: bool = True,
+                 pool_override: list[str] | None = None) -> WalkForwardResult:
+    cfg = cfg or ModelConfig()
+    start_date = start_date or C.VALID_START
+    n_weeks = len(rows_weekly)
+    mask_weekly = md.eligible[rows_weekly]
+    label = weekly_label(md, rows_weekly, mask_weekly, cfg.horizon, rank=True)
+
+    # ---- 1) DEV 期选池（可用已有池覆盖，做稳健性对比时复用）
+    dev_mask = md.dates[rows_weekly] <= pd.Timestamp(C.DEV_END)
+    rows_dev = rows_weekly[dev_mask]
+    panels_dev = {k: v[dev_mask] for k, v in panels.items()}
+    if pool_override:
+        pool = [k for k in pool_override if k in panels]
+        # 用 DEV 期 metric 填充 pool_meta
+        met = []
+        for k in pool:
+            f = build_feature_block(md, rows_dev, panels_dev, k, mask_weekly[dev_mask])
+            m = dev_metrics(f, label[dev_mask], mask_weekly[dev_mask])
+            m["factor_key"] = k
+            met.append(m)
+        pool_meta = pd.DataFrame(met).set_index("factor_key")
+    else:
+        pool, pool_meta = select_pool(md, rows_dev, panels_dev,
+                                      label[dev_mask], mask_weekly[dev_mask],
+                                      cfg, catalog, verbose=verbose)
+    K = len(pool)
+    if K == 0:
+        raise RuntimeError("候选池为空")
+
+    # ---- 2) 全期特征
+    feats = np.empty((K, n_weeks, md.N), dtype=np.float32)
+    for i, k in enumerate(pool):
+        feats[i] = build_feature_block(md, rows_weekly, panels, k, mask_weekly)
+        if verbose and (i + 1) % 10 == 0:
+            print(f"[features] {i+1}/{K}")
+
+    # ---- 3) 再估计时点：从 start_date 起每个自然季度初的第一个周频行
+    dates_w = md.dates[rows_weekly]
+    start_ts = pd.Timestamp(start_date)
+    quarters = pd.date_range(start=start_ts, end=dates_w[-1], freq="QS")
+    refit_idx: list[int] = []
+    for q in quarters:
+        pos = int(np.searchsorted(dates_w, q))
+        if pos >= n_weeks:
+            continue
+        i = pos
+        if refit_idx and i - refit_idx[-1] < cfg.refit_weeks:
+            continue
+        refit_idx.append(i)
+    if not refit_idx:
+        refit_idx = [int(np.searchsorted(dates_w, start_ts))]
+    if verbose:
+        print(f"[wf] refit 次数 {len(refit_idx)}，{dates_w[refit_idx[0]].date()} ~ {dates_w[refit_idx[-1]].date()}")
+
+    # ---- 4) 走查打分
+    # 基本面因子允许缺失（财报未覆盖的股票/退市股），缺失按中性 0 处理；
+    # 原有量价/动量因子仍要求数值完整，保持与 v1 模型一致的行为。
+    lenient_idx = np.array([i for i, k in enumerate(pool) if k.startswith(_LENIENT_PREFIXES)],
+                           dtype=np.int64)
+    strict = np.ones(len(pool), dtype=bool)
+    strict[lenient_idx] = False
+    strict_arg = strict if lenient_idx.size else None
+    scores = np.full((md.T, md.N), np.nan, dtype=np.float32)
+    weight_rows = []
+    ic_rows = []
+    blocks = refit_idx + [n_weeks]
+    prev_smooth: np.ndarray | None = None
+    alpha = float(getattr(cfg, "score_smooth_alpha", 1.0))
+    for bi in range(len(refit_idx)):
+        r = refit_idx[bi]
+        r_end = blocks[bi + 1]
+        # 训练窗口：r-train_weeks ~ r-2（标签已实现）
+        tr_lo = max(0, r - cfg.train_weeks)
+        tr_hi = max(0, r - 2)
+        Ftr = feats[:, tr_lo:tr_hi, :]
+        ytr = label[tr_lo:tr_hi]
+        mtr = mask_weekly[tr_lo:tr_hi]
+        if tr_hi - tr_lo < 52:
+            if bi == 0:
+                if verbose:
+                    print(f"[warn] 训练样本不足 ({tr_hi-tr_lo} 周)，跳过 {dates_w[r].date()}")
+                continue
+        w = fit_weights(Ftr, ytr, mtr, cfg, verbose=False, strict=strict_arg)
+        for k, wk in zip(pool, w):
+            weight_rows.append({"refit_date": dates_w[r], "factor_key": k, "weight": float(wk)})
+        # 应用区间 [r, r_end)
+        Fb = feats[:, r:r_end, :].copy()
+        if lenient_idx.size:
+            Fb[lenient_idx] = np.where(np.isfinite(Fb[lenient_idx]), Fb[lenient_idx], 0.0)
+        for j in range(r_end - r):
+            wi = r + j
+            row = np.tensordot(w, Fb[:, j, :], axes=(0, 0)).astype(np.float32)  # (N,)
+            # 复合分再中性化 + z 分数
+            bb = row[None, :]
+            mm = mask_weekly[wi][None, :]
+            if np.isfinite(bb[mm]).sum() > 20:
+                rr = neutralize_rows(bb, md.industry[rows_weekly[wi]][None, :],
+                                     md.logmcap[rows_weekly[wi]][None, :], mm)
+                zz = zscore_rows(rr, mm)[0]
+            else:
+                zz = np.full(md.N, np.nan, dtype=np.float32)
+            # 时序平滑（只使用过去信息，降低周度换手）
+            if alpha < 1.0 and prev_smooth is not None:
+                both = np.isfinite(zz) & np.isfinite(prev_smooth)
+                zz = np.where(both, alpha * zz + (1.0 - alpha) * prev_smooth,
+                              np.where(np.isfinite(zz), zz, np.nan)).astype(np.float32)
+            prev_smooth = zz.copy()
+            scores[rows_weekly[wi]] = zz
+        # 区间 OOS IC
+        sl = slice(r, r_end)
+        ic = weekly_ic(np.nan_to_num(scores[rows_weekly[sl]]), label[sl], mask_weekly[sl])
+        for ww, v in zip(dates_w[sl], ic):
+            if np.isfinite(v):
+                ic_rows.append({"date": ww, "ic": float(v), "refit": dates_w[r]})
+        if verbose:
+            print(f"[wf] refit {dates_w[r].date()} → 持有 {r_end - r} 周，非零权重 {int((np.abs(w)>0).sum())}")
+
+    weights_df = pd.DataFrame(weight_rows)
+    ic_df = pd.DataFrame(ic_rows)
+    return WalkForwardResult(rows_weekly=rows_weekly, scores=scores, weights=weights_df,
+                             pool=pool, pool_meta=pool_meta, composite_ic=ic_df, cfg=cfg)
+
+
+# ------------------------------------------------------------------ 实盘打分
+_FUND_CACHE: dict[int, object] = {}
+_TREND_CACHE: dict[int, dict] = {}
+_ALPHA_RS_CACHE: dict[int, dict] = {}
+
+# 允许缺失（填 0）的因子族前缀：低频/长窗口因子对新股天然缺失，不应因此排除股票
+_LENIENT_PREFIXES = ("fundamental-extra:", "trend-extra:", "alpha-rs:")
+
+
+def build_live_features(md, inp, pool: list[str], cfg: ModelConfig) -> np.ndarray:
+    """用最新交易日计算池内因子的中性化 z-score 特征 (K, N)。"""
+    from . import factors as qff
+    from . import momentum as qfmom
+    from . import fundamentals as qffd
+    t = md.T - 1
+    mask = md.eligible[[t]]
+    feats = np.full((len(pool), md.N), np.nan, dtype=np.float32)
+    cat = qff.load_catalog().set_index("factor_key")
+    for i, k in enumerate(pool):
+        if k.startswith(f"{qfmom.LIB}:"):
+            panel = qfmom.build_live(md, k)
+        elif k.startswith(f"{qffd.LIB}:"):
+            key = id(md)
+            fd = _FUND_CACHE.get(key)
+            if fd is None:
+                fd = qffd.FundamentalData(md)
+                _FUND_CACHE.clear()
+                _FUND_CACHE[key] = fd
+            panel = fd.build_live(md, k)
+        elif k.startswith("trend-extra:"):
+            key = id(md)
+            lr = _TREND_CACHE.get(key)
+            if lr is None:
+                from . import trend as qftrend
+                lr = qftrend.live_row(md)
+                _TREND_CACHE.clear()
+                _TREND_CACHE[key] = lr
+            panel = np.asarray(lr[k], dtype=np.float32)
+        elif k.startswith("alpha-rs:"):
+            key = id(md)
+            lr = _ALPHA_RS_CACHE.get(key)
+            if lr is None:
+                from . import alpha_rs as qfalpha
+                lr = qfalpha.live_row(md)
+                _ALPHA_RS_CACHE.clear()
+                _ALPHA_RS_CACHE[key] = lr
+            panel = np.asarray(lr[k], dtype=np.float32)
+        else:
+            entry = cat.loc[k]
+            panel = qff.compute_factor(inp, entry.to_dict())
+        if panel.ndim == 1:
+            panel = panel[None, :]
+            rows = np.array([0])
+        else:
+            rows = np.array([t])
+        r = cs_rank_rows(panel, rows, mask=mask)
+        if cfg.neutralize:
+            r = neutralize_rows(r, md.industry[[t]], md.logmcap[[t]], mask)
+        feats[i] = zscore_rows(r, mask)[0]
+    return feats
+
+
+def latest_weights(res: WalkForwardResult) -> tuple[np.ndarray, pd.Timestamp]:
+    """取最近一次 refit 的权重向量。"""
+    last = res.weights["refit_date"].max()
+    sub = res.weights[res.weights["refit_date"] == last]
+    w = sub.set_index("factor_key")["weight"].reindex(res.pool).fillna(0.0).to_numpy()
+    return w.astype(np.float64), pd.Timestamp(last)
+
+
+def live_scores(md, inp, res: WalkForwardResult) -> tuple[np.ndarray, np.ndarray, pd.Timestamp]:
+    """返回 (scores_row(N,), weights(K,), refit_date)。"""
+    w, refit = latest_weights(res)
+    F = build_live_features(md, inp, res.pool, res.cfg)
+    lenient_idx = [i for i, k in enumerate(res.pool) if k.startswith(_LENIENT_PREFIXES)]
+    if lenient_idx:
+        # 与 walk-forward 打分口径一致：低频/长窗口因子允许缺失并按中性 0 处理，
+        # 避免因 52 周新高/财报缺失把次新股整行排除。
+        F[lenient_idx] = np.where(np.isfinite(F[lenient_idx]), F[lenient_idx], 0.0)
+    row = np.tensordot(w, F, axes=(0, 0)).astype(np.float32)
+    t = md.T - 1
+    mask = md.eligible[[t]]
+    rr = neutralize_rows(row[None, :], md.industry[[t]], md.logmcap[[t]], mask)
+    zz = zscore_rows(rr, mask)[0]
+    zz = apply_universe_filter(md, zz[None, :], [t], res.cfg.universe)[0]
+    return zz, w, refit
+
+
+def apply_universe_filter(md, scores_rows: np.ndarray, rows, universe: str | None) -> np.ndarray:
+    """按 models 的 universe 设置过滤选股域（rows 为日频行号列表，scores_rows 与 rows 对齐）。
+
+    过滤只用 t 及以前数据；不满足的股票分数置 NaN（不参与排名）。
+    above_ma60 / above_ma60_slope / above_ma200：收盘 > 对应均线；_slope 另要求均线较 20 日前上行。
+    """
+    if not universe:
+        return scores_rows
+    close = np.asarray(md.close, dtype=np.float64)
+    T, N = close.shape
+    out = np.array(scores_rows, dtype=np.float32, copy=True)
+
+    def _ma(t: int, w: int) -> np.ndarray:
+        start = max(0, t - w + 1)
+        seg = close[start:t + 1]
+        cnt = np.isfinite(seg).sum(axis=0)
+        s = np.nansum(seg, axis=0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(cnt >= max(2, int(w * 0.8)), s / cnt, np.nan)
+
+    u = str(universe)
+    if u.startswith("above_ma"):
+        parts = u.split("_")
+        win = int(parts[1][2:]) if parts[1].startswith("ma") else 60
+        slope = len(parts) > 2 and parts[2] == "slope"
+        for i, t in enumerate(rows):
+            ma = _ma(int(t), win)
+            ok = np.isfinite(close[t]) & np.isfinite(ma) & (close[t] > ma)
+            if slope:
+                ma_prev = _ma(int(t) - 20, win)
+                ok &= np.isfinite(ma_prev) & (ma > ma_prev)
+            out[i] = np.where(ok, out[i], np.nan).astype(np.float32)
+    return out
+
+
+# ------------------------------------------------------------------ 持久化
+def save_result(res: WalkForwardResult, out_dir) -> None:
+    from pathlib import Path
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(out / "composite_score.npz", scores=res.scores,
+                        rows=res.rows_weekly)
+    res.weights.to_parquet(out / "model_weights.parquet", index=False)
+    res.pool_meta.to_parquet(out / "pool_meta.parquet")
+    res.composite_ic.to_parquet(out / "composite_ic.parquet", index=False)
+    # 只序列化 ModelConfig 的声明字段（排除运行时临时属性如 pool_state_out）
+    _cfg_d = {k: v for k, v in res.cfg.__dict__.items()
+              if not k.startswith("_") and k not in ("pool_state_out", "pool_state")}
+    json.dump({"pool": res.pool, "cfg": _cfg_d,
+               "refits": [str(d.date()) for d in sorted(res.weights["refit_date"].unique())]},
+              open(out / "model_meta.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+
+
+def load_result(out_dir) -> WalkForwardResult:
+    from pathlib import Path
+    out = Path(out_dir)
+    z = np.load(out / "composite_score.npz")
+    import pandas as pd
+    return WalkForwardResult(
+        rows_weekly=z["rows"], scores=z["scores"],
+        weights=pd.read_parquet(out / "model_weights.parquet"),
+        pool=json.load(open(out / "model_meta.json", encoding="utf-8"))["pool"],
+        pool_meta=pd.read_parquet(out / "pool_meta.parquet"),
+        composite_ic=pd.read_parquet(out / "composite_ic.parquet"),
+        cfg=ModelConfig(**{k: v for k, v in
+                           json.load(open(out / "model_meta.json", encoding="utf-8"))["cfg"].items()
+                           if k in _MODEL_CFG_FIELDS}),
+    )

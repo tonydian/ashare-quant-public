@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A股量化 · Pangolin</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1117'/%3E%3Cpath d='M9 23V9h6.4c3.4 0 5.4 1.8 5.4 4.7 0 3-2.1 4.8-5.5 4.8H12.4V23z' fill='%2338bdf8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css?v=20261104e">
+</head>
+<body>
+<div class="app">
+  <!-- ======================= 左侧导航 ======================= -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">P</div>
+      <div class="brand-text">
+        <h1>A股量化</h1>
+        <span class="brand-sub">Pangolin</span>
+      </div>
+    </div>
+    <nav class="nav" id="nav" aria-label="主导航">
+      <!-- 3 组：决策（现在该做什么） / 策略（每条腿的细节） / 研究（分析工具与资料） -->
+      <div class="nav-group">
+        <div class="nav-group-title">决策</div>
+        <button type="button" class="nav-item active" data-page="today" title="今日推荐">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.8"/><circle cx="8" cy="8" r="2.4"/><circle cx="8" cy="8" r=".6" fill="currentColor" stroke="none"/></svg></span>
+          <span class="nav-label">今日推荐</span></button>
+        <button type="button" class="nav-item" data-page="monthly" title="本月推荐">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.4" y="3.6" width="11.2" height="10" rx="1.4"/><path d="M2.4 6.8h11.2"/><path d="M5.6 2.2v2.6M10.4 2.2v2.6"/><path d="M5.8 9.6h1.2M9 9.6h1.2M5.8 11.8h1.2"/></svg></span>
+          <span class="nav-label">本月推荐</span></button>
+        <button type="button" class="nav-item" data-page="market" title="市场概览">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.4" y="2.4" width="4.6" height="4.6" rx="1.1"/><rect x="9" y="2.4" width="4.6" height="4.6" rx="1.1"/><rect x="2.4" y="9" width="4.6" height="4.6" rx="1.1"/><rect x="9" y="9" width="4.6" height="4.6" rx="1.1"/></svg></span>
+          <span class="nav-label">看盘</span></button>
+        <button type="button" class="nav-item" data-page="tracking" title="实盘跟踪">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.2h1.4l.7 1.3L6.9 3.6"/><path d="M9 4.2h4"/><path d="M3 9.2h1.4l.7 1.3L6.9 8.6"/><path d="M9 9.2h4"/><path d="M3 13h10"/></svg></span>
+          <span class="nav-label">实盘跟踪</span></button>
+        <button type="button" class="nav-item" data-page="portfolio" title="配置对比">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2l5.8 2.9L8 8 2.2 5.1z"/><path d="M2.2 9.4L8 12.3l5.8-2.9"/></svg></span>
+          <span class="nav-label">配置对比</span></button>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-title">策略</div>
+        <button type="button" class="nav-item" data-page="etf" title="ETF趋势">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 11l4-4 2.6 2.8L14 4.6"/><path d="M10.4 4.6H14v3.6"/></svg></span>
+          <span class="nav-label">ETF趋势</span></button>
+        <button type="button" class="nav-item" data-page="sector" title="板块轮动">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.8"/><path d="M8 2.2V8h5.8"/></svg></span>
+          <span class="nav-label">板块轮动</span></button>
+        <button type="button" class="nav-item" data-page="cb" title="可转债">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2l5.2 2v4.4c0 3-2.3 4.9-5.2 5.6-2.9-.7-5.2-2.6-5.2-5.6V4z"/><path d="M6 8l1.5 1.5L10.4 6.4"/></svg></span>
+          <span class="nav-label">可转债</span></button>
+        <button type="button" class="nav-item" data-page="backtest" title="策略回测">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 11.2l3-4.2 2.6 3L10.2 5l3.8 5.6"/><path d="M2 13.6h12"/></svg></span>
+          <span class="nav-label">回测</span></button>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-title">研究</div>
+        <button type="button" class="nav-item" data-page="stock" title="个股详情">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.4"/><path d="M10.3 10.3L14 14"/></svg></span>
+          <span class="nav-label">个股</span></button>
+        <button type="button" class="nav-item" data-page="factors" title="因子体系">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8h8L8 8l4 5.2H4"/></svg></span>
+          <span class="nav-label">因子</span></button>
+        <button type="button" class="nav-item" data-page="research" title="策略研究">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.4 2.4v4.3L3.4 12a.9.9 0 0 0 .8 1.3h7.6a.9.9 0 0 0 .8-1.3L9.6 6.7V2.4"/><path d="M5.4 2.4h5.2"/></svg></span>
+          <span class="nav-label">研究</span></button>
+        <button type="button" class="nav-item" data-page="data" title="数据与更新">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><ellipse cx="8" cy="3.8" rx="5.4" ry="2"/><path d="M2.6 3.8v8.4c0 1.1 2.4 2 5.4 2s5.4-.9 5.4-2V3.8"/><path d="M2.6 8c0 1.1 2.4 2 5.4 2s5.4-.9 5.4-2"/></svg></span>
+          <span class="nav-label">数据</span></button>
+        <button type="button" class="nav-item" data-page="reports" title="报告与文件">
+          <span class="nav-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.2h5l3 3v8.6H4z"/><path d="M9 2.2v3h3"/><path d="M6 8.2h4M6 11h3"/></svg></span>
+          <span class="nav-label">报告</span></button>
+      </div>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="side-info mono" id="sideInfo">—</div>
+      <div class="side-disclaimer">数据仅供研究<br>不构成投资建议</div>
+    </div>
+  </aside>
+
+  <!-- ======================= 主区域 ======================= -->
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="topbar-title">
+          <span class="status-dot" id="loadDot" title="加载状态"></span>
+          <h2 id="appTitle">A股量化 · Pangolin</h2>
+          <span class="page-crumb" id="pageTitle">看盘</span>
+        </div>
+        <div class="meta-chips">
+          <span class="chip">数据日期 <b class="mono" id="metaDate">—</b></span>
+          <span class="chip">模型 refit <b class="mono" id="metaRefit">—</b></span>
+          <span class="chip" id="chipModel">模型 <b class="mono" id="metaModel">—</b></span>
+          <span class="chip" id="chipUniverse">选股域 <b class="mono" id="metaUniverse">—</b></span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="server-load" title="服务器数据加载进度（/api/meta server.loaded）">
+          <span class="srv-label">服务器</span>
+          <div class="server-bar-wrap"><div class="server-bar" id="srvBar"></div></div>
+          <span class="srv-text mono" id="srvText">连接中…</span>
+        </div>
+        <span class="loading-pill" id="globalLoading"><span class="spinner"></span><span>加载中</span></span>
+        <button class="btn btn-primary" id="btnRefresh" title="重新加载当前页数据">刷新</button>
+      </div>
+    </header>
+
+    <div class="stale-bar" id="dataStaleBar" hidden>
+      <span id="dataStaleMsg">—</span>
+      <button class="btn btn-xs" id="btnStaleUpdate">立即更新数据</button>
+    </div>
+
+    <div class="ticker" id="ticker">
+      <div class="ticker-track" id="tickerTrack"><span class="ticker-item muted">正在加载市场数据…</span></div>
+    </div>
+
+    <main class="content" id="content">
+
+      <!-- ======================= 1. 看盘 ======================= -->
+      <section class="page active" id="page-today" data-page="today">
+      <div class="page-head">
+        <div>
+          <h2>今日推荐（荐股 + 荐基）</h2>
+          <div class="page-sub" id="todaySub">按当前组合方案加权 · 仅供研究</div>
+        </div>
+        <div class="page-actions">
+          <span class="etf-status" id="todayStatus">—</span>
+          <button class="btn btn-primary btn-sm" id="btnTodayExport">导出 CSV</button>
+          <button class="btn btn-sm" id="btnHoldingsInput">录入持仓</button>
+        </div>
+      </div>
+
+      <div class="grid grid-4" id="todayKpis"></div>
+
+      <div class="card" id="holdingsPanel" hidden>
+        <div class="card-head">
+          <h3>录入当前持仓（可选）</h3>
+          <span class="muted small">用于计算「该买/该卖」，格式：代码,股数（每行一只）</span>
+        </div>
+        <div class="card-body">
+          <textarea id="holdingsText" class="input" rows="5"
+            placeholder="600519,100&#10;000001,2000&#10;（留空则只看目标持仓）"
+            style="width:100%;font-family:var(--mono);font-size:12px;resize:vertical"></textarea>
+          <div class="form-actions" style="margin-top:10px">
+            <button class="btn btn-primary btn-sm" id="btnHoldingsApply">计算买卖差异</button>
+            <button class="btn btn-sm" id="btnHoldingsClear">清空</button>
+            <span class="muted small" id="holdingsHint">录入后会在清单里标注「买入/卖出/持有」</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-4" id="todayKpis"></div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>按策略看推荐</h3>
+          <span class="muted small">点卡片只看这一侧；「本月推荐」页看低换手整月名单</span>
+        </div>
+        <div class="card-body"><div id="todayStrategies" class="st-bench">加载中…</div></div>
+      </div>
+
+      <div class="today-main">
+        <div class="card">
+          <div class="card-head">
+            <h3>今日操作清单</h3>
+            <div class="today-filter" id="todayFilter"></div>
+          </div>
+          <div class="card-body">
+            <div id="todayList" class="today-list">加载中…</div>
+          </div>
+        </div>
+
+        <div class="today-side">
+          <div class="card">
+            <div class="card-head"><h3>预算与剩余</h3></div>
+            <div class="card-body"><div id="todayGroups" class="etf-combo">加载中…</div></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3>空仓与现金</h3></div>
+            <div class="card-body"><div id="todayCash" class="etf-combo">加载中…</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>候选榜（主策略复合分前 60）</h3>
+          <span class="muted small">用于理解荐股来源，非推荐买入</span></div>
+        <div class="card-body"><div id="todayCandidates" class="etf-universe">加载中…</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>信号说明</h3></div>
+        <div class="card-body"><div id="todaySignalNote" class="plain-list"></div></div>
+      </div>
+
+      <details class="fold card">
+        <summary>
+          <span>重要提示<span class="fold-hint">为什么这些数字不是收益承诺</span></span>
+          <svg class="chev" width="14" height="14" viewBox="0 0 16 16" fill="none"
+               stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
+               aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5"/></svg>
+        </summary>
+        <div class="fold-body">
+          <ul class="plain-list">
+            <li><b>荐股</b>来自两条腿：主策略（左侧低波反转，40 只等权，每 40 个交易日调仓）
+              与<b>低换手月度</b>（20 日换手最低 10 只等权，月末算名单、次月首个交易日只换变动）；</li>
+            <li><b>荐基</b>来自宽基 ETF 趋势（突破 55 日新高）；<b>荐债</b>来自可转债（高 YTM 建池
+              → 短久期优先，10 只等权）；</li>
+            <li><b>无信号即空仓</b>：某类标的无入场信号时，其预算全部进入现金（100% 国债）；</li>
+            <li class="warn-line"><b>以下是回测结果，不是收益承诺</b>：主策略 CAGR <b>7.11%</b> / Sharpe 0.61、
+              <b>低换手月度 10.02%</b> / 0.75（含 49.3bp 单边成本，年换手 7.1x）；
+              宽基 ETF 趋势 6.49% / 0.73；可转债净 SR 1.30（与三腿相关仅 0.03~0.07）；
+              <b>板块轮动 11.67% / 0.59（样本外仅 3.20%，衰减 91%，2026-11-05 起已由可转债替代）</b>；</li>
+            <li class="warn-line"><b>低换手这条腿要知道的</b>：82 个月只出现过 75 只股票，银行常年占四成，
+              本质是<b>低换手大盘股 / 红利替代</b>。同区间中证红利ETF（含股息）年化 10.06% / 0.61，
+              <b>收益打平、超额 IR ≈ −0.05</b> —— 它的价值是波动更低（11.6% vs 15.2%），不是更高收益；
+              若改成「每月全清全建」净年化只有 0.5%（成本吃掉 13pp），
+              所以执行上<b>必须只换变动、不要清仓重建</b>；</li>
+            <li class="warn-line"><b>必须知道的结构</b>：主策略收益 ≈ beta 0.33 + 现金端国债 ≈1.4pp
+              + 选股 alpha ≈1.6%/年，其中<b>多头 alpha 统计上不显著（t≈1.2）</b>。
+              它更像「半仓等权全 A + 债券替代」，不是稳定跑赢指数的策略；
+              详见 <code>reports/回测合理性审计_2026-10-29.md</code>；</li>
+            <li><b>执行</b>：开盘按清单买入；涨停买不进、跌停卖不出可顺延；每季度末再平衡回目标权重；</li>
+            <li>本页仅为量化研究输出，<b>不构成投资建议</b>。</li>
+          </ul>
+        </div>
+      </details>
+
+    </section>
+
+    <!-- ======================= 本月推荐（低换手月度） ======================= -->
+    <section class="page" id="page-monthly" data-page="monthly">
+      <div class="page-head">
+        <div>
+          <h2>本月推荐 · 低换手月度</h2>
+          <div class="page-sub" id="moSub">月末算 20 日平均换手 → 剔 ST/退市/停牌/上市不满一年 → 取换手最低 10 只等权 · 月频调仓，只换变动</div>
+        </div>
+        <div class="page-actions">
+          <span class="etf-status" id="moStatus">—</span>
+          <a class="btn btn-sm" href="/signals/lowturn_target.csv" target="_blank" rel="noopener">导出名单</a>
+          <button class="btn btn-sm" id="btnMoToToday">今日清单</button>
+        </div>
+      </div>
+
+      <div class="grid grid-4" id="moKpis"></div>
+
+      <div class="mo-split">
+        <div class="card">
+          <div class="card-head">
+            <h3>本月名单</h3>
+            <span class="muted small" id="moListMeta">—</span>
+          </div>
+          <div class="card-body"><div id="moList" class="today-list">加载中…</div></div>
+        </div>
+
+        <div class="mo-side">
+          <div class="card">
+            <div class="card-head">
+              <h3>本期换仓</h3>
+              <span class="muted small" id="moRotMeta">—</span>
+            </div>
+            <div class="card-body"><div id="moRotation" class="etf-combo">加载中…</div></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h3>行业分布</h3>
+              <span class="muted small">低换手大盘股，集中度要看见</span>
+            </div>
+            <div class="card-body"><div id="moSector" class="etf-combo">加载中…</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>净值与近 12 个月</h3>
+          <span class="muted small" id="moNavMeta">—</span>
+        </div>
+        <div class="card-body">
+          <div id="moNav" class="etf-chart">加载中…</div>
+          <div id="moMonths" class="mo-months"></div>
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3>三种交易方式</h3>
+            <span class="muted small">同一条选股规则，只改「怎么换」</span>
+          </div>
+          <div class="card-body"><div id="moLedger" class="etf-combo">加载中…</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3>分年度与基准</h3>
+            <span class="muted small">净口径</span>
+          </div>
+          <div class="card-body"><div id="moYearly" class="table-wrap">加载中…</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>策略说明与局限</h3></div>
+        <div class="card-body">
+          <ul class="plain-list">
+            <li><b>换手率口径</b>：<code>成交额 / 总市值</code>，20 日均值。不用成交量——
+              本地库里 391 只股票的量是「手」、4632 只是「股」，直接用会低估 100 倍；</li>
+            <li><b>过滤</b>：ST / 退市 / 停牌 / 上市不满 250 个交易日；<b>不做</b>流动性下限
+              （加 0.3 亿门槛后年化从 10.0% 掉到 5.6%，超额正是来自「大市值 + 成交清淡」）；</li>
+            <li><b>建仓</b>：月末收盘算名单，次月首个交易日<b>开盘</b>均仓买入；
+              份额按 100 股整手向下取整，剩余留现金；</li>
+            <li><b>换仓</b>：<b>只换变动</b>（老标的继续持有，新进补足到等权）。名单月度重合约 71%，
+              年换手 7.1x；若每月全清全建则 24x，光成本就吃掉 13pp（净年化 10.0% → 0.5%）；</li>
+            <li><b>成本</b>：滑点 40bp + 佣金 6.67bp + 印花税折单边 2.5bp + 过户费 0.1bp = 49.27bp 单边；</li>
+            <li class="warn-line"><b>对着红利比，不是对着全指比</b>：同区间中证红利ETF（含股息再投资）
+              年化 <b>10.06%</b> / Sharpe 0.61，低换手 10.02% / 0.75 —— <b>收益打平，超额 IR ≈ −0.05</b>。
+              与红利低波ETF（11.36%）比还输 1.35pp。这个策略的优势在<b>波动更低、回撤更浅</b>，不在收益；
+              详见 <code>reports/低换手与红利对比及样本区间审计_2026-11-02.md</code>；</li>
+            <li class="warn-line"><b>本质是红利/低波替代</b>：82 个月只出现过 75 只股票，
+              中国银行 95%、工商银行 89%、农业银行 85% 的月份在名单里，银行常年占四成。
+              把它当「高股息组合」用，别指望选股 alpha；</li>
+            <li class="warn-line"><b>别线性外推 10%</b>：2020/2022/2023 三年净收益为负，
+              2024 的 +42.3% 是银行/中特估行情，单独一年就撑起了「全期年化打平」；
+              剔除 2024-09-24 起那 6 个交易日，全期年化只有 6.65%，反而跑输红利 0.65pp；</li>
+            <li><b>起点敏感</b>：区间 2020-01 起年化 10.02%，换成 2018-01（数据允许的更早起点）
+              是 <b>8.20% / Sharpe 0.60</b>。页面默认用 2020 口径，看长期要看 2018 那个数；</li>
+            <li><b>未覆盖</b>：需要 20 日换手预热 + 上市满一年，最早只能回溯到 2017-11。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-market" data-page="market">
+        <div class="page-head">
+          <h3>市场概览</h3>
+          <span class="page-asof mono muted" id="marketAsOf"></span>
+        </div>
+        <div class="grid grid-indices" id="marketIndices"></div>
+        <div class="grid grid-market-mid">
+          <div class="card">
+            <div class="card-hd"><h4>市场宽度</h4><span class="muted small">全市场 / 选股域内</span></div>
+            <div class="card-bd" id="marketBreadth"></div>
+          </div>
+          <div class="card chart-card">
+            <div class="card-hd">
+              <h4>指数走势</h4>
+              <div class="card-tools">
+                <select class="select select-sm" id="indexSelect" title="切换指数">
+                  <option value="csi_all">中证全指</option>
+                  <option value="hs300">沪深300</option>
+                  <option value="csi500">中证500</option>
+                  <option value="csi1000">中证1000</option>
+                </select>
+              </div>
+            </div>
+            <div class="card-bd">
+              <div class="chart-box" id="indexChart"><div class="chart-loading">图表加载中…</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="grid grid-3" id="marketBoards"></div>
+        <div class="card">
+          <div class="card-hd"><h4>行业热力</h4><span class="muted small">按 20 日收益排序 · 红涨绿跌</span></div>
+          <div class="card-bd table-wrap table-wrap-lg" id="industryTable"></div>
+        </div>
+      </section>
+
+      <!-- ======================= 2. 推荐 ======================= -->
+      <section class="page" id="page-backtest" data-page="backtest">
+        <div class="page-head"><h3>策略回测</h3><span class="muted small">无未来函数 · T+1 开盘成交 · 整手 · 含成本</span></div>
+        <div class="card">
+          <div class="card-hd"><h4>策略类型</h4><span class="muted small">选择要回测的策略</span></div>
+          <div class="card-bd">
+            <div class="strat-groups" id="btKindPicker">
+              <div class="strat-group">
+                <div class="strat-group-title">单策略</div>
+                <div class="strat-grid">
+                  <button class="strat-card active" data-kind="stock">
+                    <span class="strat-name">个股模型</span>
+                    <span class="strat-desc">wf_h10 · 左侧低波反转 · 40 只等权</span></button>
+                  <button class="strat-card" data-kind="etf">
+                    <span class="strat-name">宽基 ETF 趋势</span>
+                    <span class="strat-desc">3 只宽基 · 突破 55 日新高 · 最多持 2 只</span></button>
+                  <button class="strat-card" data-kind="sector">
+                    <span class="strat-name">板块 ETF 轮动</span>
+                    <span class="strat-desc">24 个行业板块 · 突破 + 动量前 3</span></button>
+                  <button class="strat-card" data-kind="cb">
+                    <span class="strat-name">可转债 高 YTM</span>
+                    <span class="strat-desc">高 YTM 建池 · 短久期优先 · 20 只等权 / 10 日</span></button>
+                  <button class="strat-card" data-kind="lowturn">
+                    <span class="strat-name">低换手月度</span>
+                    <span class="strat-desc">20 日换手最低 10 只 · 月末算名单 · 月初开盘只换变动</span></button>
+                </div>
+              </div>
+
+              <div class="strat-group">
+                <div class="strat-group-title">
+                  组合配置
+                  <span class="muted small">四类资产：主策略（个股）· 宽基 ETF · 板块轮动 · 可转债</span>
+                </div>
+                <div class="strat-grid">
+                  <button class="strat-card" data-kind="combo_fixed" data-method="fixed">
+                    <span class="strat-name">自定义权重</span>
+                    <span class="strat-desc">手动指定四类资产比例（默认 40/30/20/10）</span></button>
+                  <button class="strat-card" data-kind="combo_eq" data-method="eq">
+                    <span class="strat-name">等权 EQ</span>
+                    <span class="strat-desc">等权分配 · 可勾选纳入可转债</span></button>
+                  <button class="strat-card" data-kind="combo_ivp" data-method="ivp">
+                    <span class="strat-name">逆波动 IVP</span>
+                    <span class="strat-desc">按波动率倒数分配 · 忽略相关性</span></button>
+                  <button class="strat-card" data-kind="combo_erc" data-method="erc">
+                    <span class="strat-name">ERC 风险平价 <span class="tag-ok">最优</span></span>
+                    <span class="strat-desc">各资产风险贡献相等 · 迭代求解</span></button>
+                  <button class="strat-card" data-kind="combo_mdp" data-method="mdp">
+                    <span class="strat-name">最大分散 MDP</span>
+                    <span class="strat-desc">最大化分散化比率 · 偏重低相关资产</span></button>
+                  <button class="strat-card" data-kind="combo_5050" data-method="fixed"
+                          data-preset="5050">
+                    <span class="strat-name">50/50 主+宽基</span>
+                    <span class="strat-desc">经典两资产 · Calmar 最优</span></button>
+                </div>
+              </div>
+            </div>
+            <div class="form-grid" id="btRangeParams" style="margin-top:12px">
+              <label class="field"><span class="field-label">开始日期</span>
+                <input class="input" id="btStart" type="date" value="2020-01-02"></label>
+              <label class="field"><span class="field-label">结束日期</span>
+                <input class="input" id="btEnd" type="date"></label>
+            </div>
+            <div class="form-grid" id="btKindParams" style="margin-top:8px"></div>
+            <div class="form-grid" id="btCommonParams" style="margin-top:8px"></div>
+            <div class="form-actions" style="margin-top:14px">
+              <button class="btn btn-primary" id="btnRunBacktest">运行回测</button>
+              <label class="field-check" style="display:inline-flex;align-items:center;gap:6px;margin-left:12px">
+                <input type="checkbox" id="btkCostNet">
+                <span class="small">扣费后（统一成本口径）</span>
+              </label>
+              <span class="muted small">四类策略均可回测；结果含全期/验证期/样本外与净值曲线</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="btProgressCard" hidden>
+          <div class="card-bd">
+            <div class="progress"><div class="progress-bar" id="btBar" style="width:0%"></div></div>
+            <div class="progress-meta">
+              <span id="btStatus">—</span>
+              <span class="mono muted" id="btElapsed"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="error-box" id="btError" hidden></div>
+
+        <div id="btResult" hidden>
+          <div class="card">
+            <div class="card-hd"><h4>回测指标</h4><span class="muted small mono" id="btRange"></span></div>
+            <div class="card-bd">
+              <div class="grid grid-kpi" id="btMetrics"></div>
+              <div class="muted small" id="btSubInfo"></div>
+            </div>
+          </div>
+          <div class="grid grid-2">
+            <div class="card chart-card">
+              <div class="card-hd"><h4>净值与回撤</h4><span class="muted small">后端 matplotlib 生成</span></div>
+              <div class="card-bd"><div class="chart-box" id="btChart"></div></div>
+            </div>
+            <div class="card">
+              <div class="card-hd"><h4>分年度收益</h4><span class="muted small" id="btYearlyNote"></span></div>
+              <div class="card-bd table-wrap" id="btYearly"></div>
+            </div>
+          </div>
+          <div class="grid grid-2">
+            <div class="card">
+              <div class="card-hd"><h4>分区间指标</h4><span class="muted small">full / val / oos</span></div>
+              <div class="card-bd table-wrap" id="btPeriods"></div>
+            </div>
+            <div class="card">
+              <div class="card-hd"><h4>基准对比</h4><span class="muted small">同区间</span></div>
+              <div class="card-bd table-wrap" id="btBench"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-hd"><h4>交易统计</h4><span class="muted small" id="btTradeNote"></span></div>
+            <div class="card-bd" id="btTrades"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================= 4. 个股 ======================= -->
+      <section class="page" id="page-stock" data-page="stock">
+        <div class="page-head">
+          <h3>个股详情</h3>
+          <div class="page-actions">
+            <select class="select select-sm" id="stockModelSelect" title="选择打分模型"></select>
+            <span class="muted small">输入代码或名称，回车取第一个匹配</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-bd">
+            <div class="search-wrap">
+              <input class="input search-input" id="stockSearchInput" type="search" placeholder="例如 000001 / 平安银行" autocomplete="off">
+              <button class="btn btn-primary" id="btnStockSearch">搜索</button>
+              <div class="suggest" id="stockSuggest" hidden></div>
+            </div>
+            <div class="muted small search-hint">数据来源：本地 A 股行情库（后复权价格）；复合分为模型最新打分。</div>
+          </div>
+        </div>
+        <div id="stockDetail">
+          <div class="empty-block">🔍 搜索一只股票查看详情、K 线、因子贡献与基本面。</div>
+        </div>
+      </section>
+
+      <!-- ======================= 5. 数据 ======================= -->
+      <section class="page" id="page-data" data-page="data">
+      <div class="page-head">
+        <h3>数据与更新</h3>
+        <span class="muted small">一键拉取最新行情并重算全链路</span>
+      </div>
+
+      <!-- ============ 更新操作 ============ -->
+      <div class="card" id="pipelineCard">
+        <div class="card-hd">
+          <h4>更新</h4>
+          <span class="muted small" id="pipeLastRun">尚未运行</span>
+        </div>
+        <div class="card-bd">
+          <div class="up-row">
+            <button class="btn btn-primary btn-lg" id="btnPipeRun">
+              <span class="up-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 7.2A5.4 5.4 0 1 0 13 9.8"/><path d="M13.4 3.4v3.9h-3.9"/></svg></span>
+              <span class="up-txt">
+                <b>全部更新</b>
+                <i>拉行情 → 重建因子 → 重训模型 → 回测 → 信号</i>
+              </span>
+            </button>
+            <button class="btn btn-lg" id="btnPipeFast">
+              <span class="up-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8.8 1.8 4 8.6h3.2l-.8 5.6 4.8-6.8H8z"/></svg></span>
+              <span class="up-txt">
+                <b>只重算策略</b>
+                <i>跳过行情与因子，约 5 分钟</i>
+              </span>
+            </button>
+            <div class="up-meta">
+              <span class="pl-status" id="pipeStatusText">未运行</span>
+              <span class="muted small" id="pipeEta"></span>
+            </div>
+          </div>
+
+          <div id="pipeProg" class="pl-prog" hidden>
+            <div class="pl-prog-head">
+              <span class="pl-prog-step" id="pipeProgStep">准备中…</span>
+              <span class="pl-prog-pct" id="pipeProgPct">0%</span>
+            </div>
+            <div class="pl-prog-track"><div class="pl-prog-fill" id="pipeProgFill"></div></div>
+            <div class="pl-prog-sub" id="pipeProgSub"></div>
+          </div>
+
+          <div id="pipelineStages" style="margin-top:14px"></div>
+          <div id="pipelineTail" class="pl-log" hidden></div>
+        </div>
+      </div>
+
+      <!-- ============ 一致性自检 ============ -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">
+          <h4>全链路一致性</h4>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="muted small" id="consSummary">—</span>
+            <button class="btn btn-xs" id="btnConsCheck">重新检测</button>
+          </div>
+        </div>
+        <div class="card-bd">
+          <div id="consistencyBox" class="muted small">尚未检测</div>
+        </div>
+      </div>
+
+      <!-- ============ 数据源信息 ============ -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">
+          <h4>数据源</h4>
+          <span class="muted small">行情来自腾讯，前端展示用扩展行情库</span>
+        </div>
+        <div class="card-bd">
+          <div id="dataStatus" class="muted small">加载中…</div>
+        </div>
+      </div>
+    </section>
+
+      <!-- ======================= 6. 因子 ======================= -->
+      <section class="page" id="page-factors" data-page="factors">
+        <div class="page-head"><h3>因子体系</h3><span class="muted small" id="factorStatsNote"></span></div>
+        <div class="grid grid-kpi" id="factorCounts"></div>
+        <div class="grid grid-2">
+          <div class="card">
+            <div class="card-hd"><h4>因子族</h4><span class="muted small">按 |dev ICIR| 排序</span></div>
+            <div class="card-bd table-wrap" id="factorFamilies"></div>
+          </div>
+          <div class="card">
+            <div class="card-hd"><h4>复合分 IC</h4><span class="muted small">walk-forward 样本</span></div>
+            <div class="card-bd" id="factorComposite"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-hd"><h4>入模池</h4><span class="muted small" id="factorPoolCount">按 |权重| 排序</span></div>
+          <div class="card-bd table-wrap table-wrap-lg" id="factorPool"></div>
+        </div>
+        <div class="card">
+          <div class="card-hd"><h4>基本面因子</h4><span class="muted small">DEV IC / ICIR / 覆盖率</span></div>
+          <div class="card-bd table-wrap" id="factorFundamental"></div>
+        </div>
+      </section>
+
+      <!-- ======================= 7. 报告 ======================= -->
+      <section class="page" id="page-etf" data-page="etf">
+      <div class="page-head">
+        <div>
+          <h2>右侧 ETF 趋势策略</h2>
+          <div class="page-sub">3 只宽基 ETF · Donchian55 突破 · 最多同时持 2 只 · 严格 T+1 · 四腿组合里的 ETF 腿（20%）</div>
+        </div>
+        <div class="etf-status" id="etfStatusChip">—</div>
+      </div>
+
+      <div class="grid grid-4" id="etfKpis"></div>
+
+      <div class="card etf-hero">
+        <div class="card-head">
+          <h3>组合净值曲线</h3>
+          <div class="etf-legend">
+            <span class="lg lg-main">主策略</span>
+            <span class="lg lg-etf">ETF趋势</span>
+            <span class="lg lg-combo">50/50 组合</span>
+          </div>
+        </div>
+        <div class="card-body">
+          <div id="etfNav" class="etf-chart">加载中…</div>
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="card-head"><h3>当前信号</h3><span class="muted small" id="etfAsOf">—</span></div>
+          <div class="card-body"><div id="etfUniverse" class="etf-universe">加载中…</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>组合对比</h3><span class="muted small">样本外 = 2022 起</span></div>
+          <div class="card-body"><div id="etfCombo" class="etf-combo">加载中…</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>参数稳健性</h3><span class="muted small">不做寻优，只看高原</span></div>
+        <div class="card-body"><div id="etfSweep" class="etf-sweep">加载中…</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>组合方案（主策略 + ETF 趋势 + 512890 红利低波）</h3>
+          <span class="muted small" id="comboRecTag">—</span>
+        </div>
+        <div class="card-body"><div id="comboPlan" class="etf-combo">加载中…</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>策略说明与局限</h3></div>
+        <div class="card-body">
+          <ul class="plain-list">
+            <li><b>入场</b>：收盘价突破过去 55 日最高（不含当日），且 20 日均成交额 ≥ 5000 万；</li>
+            <li><b>出场</b>：收盘价不再创新高即离场（紧出场），平均持仓时间仅约 15%；</li>
+            <li><b>持仓</b>：同时最多 <b>2 只</b> ETF（每只占 1/2），只有 1 只突破时自动降到半仓（这是有效风控）；其余资金 100% 国债；</li>
+            <li><b>成本</b>：佣金 2.5bp（最低 5 元）、ETF 免印花税、滑点 5bp 单边；</li>
+            <li><b>时序</b>：严格 T+1 —— t 日收盘出信号，t+1 日成交，买入当日不计收益（已修正历史版本的同 bar 前视）；</li>
+            <li><b>组合</b>：实盘为四腿 40/30/20/10（主策略 / 低换手 / 宽基ETF / 可转债），每季度再平衡；ETF 腿占 20%，最多同时持 2 只、每只 1/2 仓；转债腿占 10%，10 只等权、1 手 = 10 张；</li>
+            <li class="warn-line"><b>已放弃</b>：动态切换（按主策略净值趋势决定配比）经严格因果与噪声对照测试被证伪；</li>
+            <li><b>局限</b>：平均暴露仅约 15%，大部分时间在现金；bootstrap Sharpe 置信区间仍宽。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-sector" data-page="sector">
+      <div class="page-head">
+        <div>
+          <h2>板块 ETF 轮动</h2>
+          <div class="page-sub">24 个行业板块 · 突破 55 日新高 + 动量前 3 · 每 10 日调仓 · 仅供研究</div>
+        </div>
+        <div class="etf-status" id="secStatusChip">—</div>
+      </div>
+
+      <div class="grid grid-4" id="secKpis"></div>
+
+      <div class="card">
+        <div class="card-head"><h3>净值曲线</h3>
+          <span class="muted small" id="secAsOf">—</span></div>
+        <div class="card-body"><div id="secNav" class="etf-chart">加载中…</div></div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="card-head"><h3>最新信号</h3>
+            <span class="muted small">按 60 日动量排序</span></div>
+          <div class="card-body"><div id="secSignal" class="etf-combo">加载中…</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>分区间表现</h3></div>
+          <div class="card-body"><div id="secPeriods" class="etf-combo">加载中…</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>板块池状态</h3>
+          <span class="muted small" id="secPoolInfo">—</span></div>
+        <div class="card-body"><div id="secUniverse" class="etf-universe">加载中…</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>策略说明与局限</h3></div>
+        <div class="card-body">
+          <ul class="plain-list">
+            <li><b>标的</b>：24 个行业板块 ETF（已剔除纳指/标普/日经/港股/沪深300 等海外与宽基）；</li>
+            <li><b>代码核验</b>：<code>159949</code> 原标"军工"实为<b>创业板50</b>（与创业板指 rho=0.986、反推电力设备44%+电子22%），
+              本质是宽基，<b>已于 2026-11-04 移出板块池</b>；<code>516010</code> 原标"软件"实为<b>游戏</b> ETF，仅改名、仍参与；</li>
+            <li><b>时点可知</b>：每个调仓日只交易当时已上市 + 20 日均额 ≥ 2500 万的 ETF（2018 年仅 5 只可用）；</li>
+            <li><b>入场</b>：板块代表 ETF 收盘突破过去 55 日最高；<b>排序</b>：60 日动量前 3 等权；</li>
+            <li><b>出场</b>：下次调仓不再满足突破即移出（无单独止损）；<b>调仓</b>：每 10 个交易日；</li>
+            <li><b>现金</b>：未投资部分 100% 国债 ETF；成本：单边 5bp，ETF 免印花税；</li>
+            <li class="warn-line"><b>收益依赖</b>：收益几乎全部集中在 2020-2021 板块牛市，
+              <b>样本外（2022+）已接近零</b>——具体数值看上方的「分区间表现」卡片，这里不写死，
+              因为它每次重跑都会变；</li>
+            <li><b>局限</b>：ETF 存续偏差（池内都是活到 2026 的品种）、样本仅 8 年；
+              2026-11 的内部广度、早买、21 个 OHLC 因子、多因子合成四轮尝试<b>全部判否</b>，见「报告」页；</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-cb" data-page="cb">
+      <div class="page-head">
+        <div>
+          <h2>可转债 · 高 YTM 策略</h2>
+          <div class="page-sub">YTM 建池 3× + 短久期优先 · 20 只等权 · 10 日调仓 · 与股票日相关 0.07 / 与 ETF 0.03 · 仅供研究</div>
+        </div>
+        <div class="etf-status" id="cbStatusChip">—</div>
+      </div>
+
+      <div class="grid grid-4" id="cbKpis"></div>
+
+      <div class="card etf-hero">
+        <div class="card-head">
+          <h3>策略净值</h3>
+          <span class="muted small" id="cbNavMeta">—</span>
+        </div>
+        <div class="card-body"><div id="cbNav" class="etf-chart">加载中…</div></div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="card-head"><h3>市场环境：全市场 YTM 中位</h3>
+            <span class="muted small">YTM 高 = 便宜（该配）；YTM 低 = 贵</span></div>
+          <div class="card-body"><div id="cbEnv" class="etf-chart">加载中…</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>仓位建议</h3><span class="muted small" id="cbAdviceTag">—</span></div>
+          <div class="card-body"><div id="cbAdvice" class="etf-combo">加载中…</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>目标持仓</h3>
+          <span class="muted small" id="cbHoldInfo">—</span>
+        </div>
+        <div class="card-body"><div id="cbHoldings" class="etf-universe">加载中…</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>多资产组合对比</h3>
+          <span class="muted small" id="cbComboInfo">统一区间 · 月度再平衡 · 已扣再平衡成本</span></div>
+        <div class="card-body"><div id="cbCombos" class="etf-combo">加载中…</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>策略说明与局限</h3></div>
+        <div class="card-body">
+          <ul class="plain-list">
+            <li><b>选券</b>：先按 YTM 取前 60 只建池，池内按<b>剩余期限升序</b>取前 20 只等权。YTM 只依赖「票息序列 + 到期赎回价 + 到期日」三个发行时静态条款；</li>
+            <li><b>为什么加久期</b>：控制 YTM 后剩余期限越短，债底回归越快。<b>回撤</b> 从 −20.64% 降到 −13.58%（12 组参数 12/12 改善），CAGR 16.62% → 18.11%；</li>
+            <li><b>剩余期限下限 0.30 年</b>：短久期改善的 80% 来自剩余 &lt;0.2 年的债，但那段实盘已停止交易（到期前约 5 个交易日停牌 + 兑付冻结），故排除；</li>
+            <li><b>为什么不用双低</b>：东财无历史转股价报表，用「初始转股价 + 正股复权因子」反推的转股价值与快照偏差 p10/p90 = −70/+98pp（下修与占位值混杂），结论不可信，已弃用；</li>
+            <li><b>YTM 口径</b>：精确 IRR（按实际付息时点折现）。简单算术年化对短久期高估 1~2pp（实测美锦 +2.26pp），会系统性偏向短久期；</li>
+            <li><b>信用风险过滤</b>：价格 ≥ 90 + 发行规模 ≥ 2 亿 + 20 日均额 ≥ 500 万 + 上市满 10 日。**不用评级**（当前快照，非 PIT）；</li>
+            <li class="warn-line"><b>违约债确实会被选中</b>：664 只退市转债中 6 只最后价 &lt; 90（搜特 18.0 / 蓝盾 26.9 / 鸿达 42.1 / 广汇 45.8），其中 5 只曾被持有，搜特被选中 53 次。这是结构性暴露；</li>
+            <li class="warn-line"><b>收益主要来自估值扩张，不是 carry</b>：2019/2021/2025 三年估值贡献 87pp。不能线性外推 18%；</li>
+            <li class="warn-line"><b>横截面选券 alpha 很薄</b>：YTM 分组「均值」价差 −0.05%/10日（接近零），「中位数」价差 +0.45%/10日——两者都对，说明收益来自少数暴涨债（凸性），不是稳定选券能力。351 只债中前 10 只贡献了 20% 的正收益；</li>
+            <li class="warn-line"><b>当前 YTM 处于历史低位</b>：全市场 YTM 中位为负、价格中位 127 元，合理预期是 3~6%/年，不是 18%；</li>
+            <li><b>未覆盖</b>：已公告强赎不在数据里标记，实盘需人工核对公告（强赎后价格向 100 收敛）。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+        <section class="page" id="page-portfolio" data-page="portfolio">
+      <div class="page-head">
+        <h3>配置对比</h3>
+        <span class="muted small">
+          三资产：主策略（个股）· 宽基 ETF · 板块轮动 ｜ 协方差 252 日滚动 · 季度再平衡 · 无前视
+        </span>
+      </div>
+
+      <!-- 六种方法卡片 -->
+      <div class="card">
+        <div class="card-hd">
+          <h4>六种配置方法</h4>
+          <span class="muted small">点击卡片可跳转回测</span>
+        </div>
+        <div class="card-bd">
+          <div class="pf-methods" id="pfMethods">加载中…</div>
+        </div>
+      </div>
+
+      <!-- 权重构成对比 -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">
+          <h4>平均权重构成</h4>
+          <span class="muted small">主策略 M · 宽基 W · 板块 S</span>
+        </div>
+        <div class="card-bd">
+          <div id="pfWeightsBar">加载中…</div>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="margin-top:14px; gap:14px">
+        <!-- 相关性 -->
+        <div class="card">
+          <div class="card-hd">
+            <h4>相关性矩阵</h4>
+            <span class="muted small">越低越能分散</span>
+          </div>
+          <div class="card-bd">
+            <div id="portfolioCorr">加载中…</div>
+          </div>
+        </div>
+
+        <!-- 参数敏感性 -->
+        <div class="card">
+          <div class="card-hd">
+            <h4>ERC 参数敏感性</h4>
+            <span class="muted small">协方差窗口 × 再平衡频率</span>
+          </div>
+          <div class="card-bd">
+            <div id="pfGrid">加载中…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 候选跟踪 -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-hd">
+          <h4>候选模型跟踪</h4>
+          <span class="muted small">滚动上线 = 若在该时点上线，到今天的年化</span>
+        </div>
+        <div class="card-bd">
+          <div id="candidateTable">加载中…</div>
+        </div>
+      </div>
+    </section>
+    <!-- ======================= 研究 ======================= -->
+    <section class="page" id="page-research" data-page="research">
+      <div class="page-head">
+        <div>
+          <h2>策略研究</h2>
+          <div class="page-sub">成本敏感性 · 调仓周期 · ETF 池健康度</div>
+        </div>
+        <button class="btn" id="btnResearchRefresh">刷新</button>
+      </div>
+
+      <!-- 核心结论 -->
+      <div class="rs-kpis" id="rsKpis">
+        <div class="rs-kpi muted">加载中…</div>
+      </div>
+
+      <!-- 成本敏感性 -->
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>成本敏感性</h4>
+          <span class="muted small">滑点从 0 到 60bp 的收益变化</span>
+        </div>
+        <div class="card-bd">
+          <div id="rsCost" class="muted small">加载中…</div>
+        </div>
+      </div>
+
+      <!-- 调仓周期 -->
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>调仓周期研究</h4>
+          <span class="muted small">主策略：10 日 → 40 日</span>
+        </div>
+        <div class="card-bd">
+          <div id="rsRebal" class="muted small">加载中…</div>
+        </div>
+      </div>
+
+      <!-- ETF 弹性 vs 固定 -->
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>ETF 策略：弹性周期 vs 固定周期</h4>
+          <span class="muted small">因次方量化文章启发做的实验</span>
+        </div>
+        <div class="card-bd">
+          <div id="rsEtfFlex" class="muted small">加载中…</div>
+        </div>
+      </div>
+
+      <!-- ETF 池健康度 -->
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>ETF 池健康度</h4>
+          <span class="muted small">流动性 + 相关性（次方量化标准）</span>
+        </div>
+        <div class="card-bd">
+          <div id="rsPool" class="muted small">加载中…</div>
+        
+      <!-- 实验台账 -->
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>实验台账</h4>
+          <span class="muted small">已弃用的方向（避免重复踩坑）</span>
+        </div>
+        <div class="card-bd">
+          <div id="rsLedger" class="muted small">加载中…</div>
+        </div>
+      </div></div>
+      </div>
+    </section>
+    <!-- ======================= 跟踪 ======================= -->
+    <section class="page" id="page-tracking" data-page="tracking">
+      <div class="page-head">
+        <div>
+          <h2>实盘跟踪</h2>
+          <div class="page-sub">记录信号 · 成交 · 净值，与回测对比</div>
+        </div>
+        <button class="btn" id="btnTrackRefresh">刷新</button>
+      </div>
+
+      <div class="rs-kpis" id="tkKpis">
+        <div class="rs-kpi muted">加载中…</div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>净值曲线</h4>
+          <span class="muted small" id="tkNavMeta">—</span>
+        </div>
+        <div class="card-bd">
+          <div id="tkNav" class="muted small">加载中…</div>
+        </div>
+      </div>
+
+      <div class="card" id="tkOps" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>操作</h4>
+          <span class="muted small">全部在网页完成，无需命令行</span>
+        </div>
+        <div class="card-bd">
+          <div class="tk-op-row">
+            <button class="btn btn-primary" id="tkBtnSignal">记录今日信号</button>
+            <button class="btn" id="tkBtnNav">更新净值</button>
+            <button class="btn btn-ghost" id="tkBtnReset">清空台账</button>
+          </div>
+
+          <div class="tk-form-title">补录成交</div>
+          <div class="tk-form">
+            <label class="tk-f"><span>日期</span>
+              <input type="date" id="tkDate"></label>
+            <label class="tk-f"><span>代码</span>
+              <input type="text" id="tkCode" placeholder="600000" maxlength="6"></label>
+            <label class="tk-f"><span>方向</span>
+              <select id="tkSide">
+                <option value="buy">买入</option>
+                <option value="sell">卖出</option>
+              </select></label>
+            <label class="tk-f"><span>价格</span>
+              <input type="number" id="tkPrice" step="0.001" placeholder="12.34"></label>
+            <label class="tk-f"><span>股数</span>
+              <input type="number" id="tkShares" step="100" placeholder="800"></label>
+            <label class="tk-f"><span>费用</span>
+              <input type="number" id="tkFee" step="0.01" placeholder="5"
+                value="5"></label>
+            <label class="tk-f tk-f-wide"><span>备注</span>
+              <input type="text" id="tkReason" placeholder="主策略建仓 / 调仓卖出"></label>
+            <button class="btn btn-primary" id="tkBtnFill">提交成交</button>
+          </div>
+          <div class="tk-hint muted small" id="tkOpHint">
+            提示：成交按「日期 + 代码 + 方向」写入台账，买入更新持仓成本，卖出减少股数。
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>当前持仓</h4>
+          <span class="muted small" id="tkHoldMeta">—</span>
+        </div>
+        <div class="card-bd">
+          <div id="tkHold" class="muted small">加载中…</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>成交记录</h4>
+          <span class="muted small" id="tkTradeMeta">—</span>
+        </div>
+        <div class="card-bd">
+          <div id="tkTrades" class="muted small">加载中…</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>信号 vs 持仓一致性</h4>
+          <span class="muted small">检查是否按规则执行</span>
+        </div>
+        <div class="card-bd">
+          <div id="tkConsistency" class="muted small">加载中…</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-hd">
+          <h4>如何记录</h4>
+        </div>
+        <div class="card-bd">
+          <div class="rs-note">
+            <b>每日收盘后：</b><br>
+            <code>python scripts/track_record.py nav</code><br><br>
+            <b>有成交时补录：</b><br>
+            <code>python scripts/track_record.py fill --code 600000 --side buy --price 12.34 --shares 800 --fee 5</code><br><br>
+            <b>记录当日信号：</b><br>
+            <code>python scripts/track_record.py signal</code><br><br>
+            <b>查看报告：</b><br>
+            <code>python scripts/track_record.py report</code>
+          </div>
+        </div>
+      </div>
+    </section>
+
+
+
+
+    <section class="page" id="page-reports" data-page="reports">
+        <div class="page-head">
+          <h3>报告与文件</h3>
+          <span class="page-actions"><span class="muted small" id="reportCount">—</span>
+            <a class="btn btn-sm" href="/reports/" target="_blank" rel="noopener">打开 /reports/ 目录</a></span>
+        </div>
+        <div class="card">
+          <div class="card-hd"><h4>文件列表</h4><span class="muted small">点击文件名在新窗口打开</span></div>
+          <div class="card-bd table-wrap table-wrap-lg" id="reportList"></div>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="foot">
+      <span>数据仅供研究，不构成投资建议。</span>
+      <span class="muted">本地量化看板 · 无外网请求 · <span class="mono" id="footVersion">v1</span></span>
+    </footer>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<noscript><div class="noscript">本页面需要启用 JavaScript。</div></noscript>
+<script src="/static/app.js?v=20261105a"></script>
+</body>
+</html>

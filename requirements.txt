@@ -1,0 +1,19 @@
+# A 股多因子量化系统 —— 运行依赖
+#
+# 安装：
+#   python -m venv .venv
+#   .venv\Scripts\activate          (Windows)
+#   source .venv/bin/activate       (macOS / Linux)
+#   pip install -r requirements.txt
+#
+# 验证环境：Python 3.13.9 / Windows 11。Python 3.11 ~ 3.13 均可。
+# 版本号为“已验证的最低版本”，遇到 API 报错时优先升级到最新版。
+
+numpy>=1.26          # 矩阵运算，全部模块依赖
+pandas>=2.2          # 面板数据结构；本项目在 3.0.6 上开发验证
+pyarrow>=14.0        # pandas 读写 parquet（模型权重、财报、转债行情）必需
+matplotlib>=3.7      # 报告配图、网页看板出图
+scipy>=1.11          # 统计检验（t 值、FDR、Bootstrap）
+
+# 可选：跑单元测试时才需要（不影响出信号）
+pytest>=8.0
