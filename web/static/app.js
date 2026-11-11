@@ -3860,12 +3860,37 @@
   // ---- 数据过期警示
   window.__qfCheckStale = function (a) { checkDataFreshness(a); };
 
+  // 后端检测到「磁盘已更新、服务内存还旧」时会自动重载（约 30 秒）。
+  // 这段时间前端每 6 秒重拉一次今日推荐，用户不用手动刷新，也不会再看到
+  // 「请点开始更新」这种已经做过一次还让他再做的提示。
+  var _reloadPoll = { timer: null, tries: 0 };
+  function scheduleReloadPoll() {
+    if (_reloadPoll.timer) return;
+    _reloadPoll.tries = 0;
+    _reloadPoll.timer = setInterval(function () {
+      _reloadPoll.tries++;
+      if (_reloadPoll.tries > 12) {          // 72 秒还没好就放弃，避免无限轮询
+        clearInterval(_reloadPoll.timer);
+        _reloadPoll.timer = null;
+        return;
+      }
+      loadToday(true);
+    }, 6000);
+  }
+  function stopReloadPoll() {
+    if (_reloadPoll.timer) {
+      clearInterval(_reloadPoll.timer);
+      _reloadPoll.timer = null;
+    }
+  }
+
   function checkDataFreshness(forceAsof) {
     // 优先用后端诊断（区分「数据过期」与「模型滞后」）
     var d = state.today || {};
     var st = d.stale || null;
     var bar = byId('dataStaleBar');
     if (!bar) return;
+    if (!st || st.action !== 'reload') stopReloadPoll();
 
     // 后端已有诊断 → 直接用
     if (st && st.level) {
@@ -3874,14 +3899,22 @@
       bar.className = 'stale-bar' + (st.level === 'bad' ? ' stale-bad' : ' stale-warn');
       var prefix = st.level === 'bad' ? '⚠️ ' : '';
       var action = st.action === 'retrain' ? '请点「开始更新」重训模型'
-        : (st.action === 'update_data' ? '请点「开始更新」拉取数据' : '');
+        : (st.action === 'reload' ? ''
+        : (st.action === 'update_data' ? '请点「开始更新」拉取数据' : ''));
       setText('dataStaleMsg', prefix + (st.message || '') +
         (action ? '，' + action : ''));
       // 按钮文案随动作变化
       var btn = byId('btnStaleUpdate');
+      if (st.action === 'reload') scheduleReloadPoll();
       if (btn) {
-        btn.textContent = st.action === 'retrain' ? '重训模型'
-          : (st.action === 'update_data' ? '更新数据' : '去更新');
+        // 自动重载期间按钮置灰：这时再点更新只会让等待变长
+        btn.disabled = (st.action === 'reload');
+        if (!btn.disabled) {
+          btn.textContent = st.action === 'retrain' ? '重训模型'
+            : (st.action === 'update_data' ? '更新数据' : '去更新');
+        } else {
+          btn.textContent = '正在重载…';
+        }
       }
       return;
     }
@@ -3912,6 +3945,12 @@
       var d = state.today || {};
       var st = d.stale || {};
       var act = st.action || 'update_data';
+      // 服务端正在自动重载 → 别再启动一次 20 分钟的更新（这正是以前死循环的地方）
+      if (act === 'reload') {
+        toast('服务正在重载行情（约 30 秒），完成后会自动刷新，不用再点更新', 'info');
+        scheduleReloadPoll();
+        return;
+      }
       // 模型滞后 → 只重跑下游（快）；数据过期 → 全量更新
       var payload = (act === 'retrain')
         ? { skip_data: true, skip_factors: true }

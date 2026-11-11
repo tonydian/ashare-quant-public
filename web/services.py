@@ -298,6 +298,13 @@ class DataService:
         self.registry: list[dict] = []
         self._registry_ts = 0.0
         self.update_running = False
+        # 「更新完了提示还在」的根因：服务只在自己触发 data/update 时 reload。
+        # 点「开始更新」走的是 /api/pipeline/run —— 那是个完全脱离的子进程，
+        # 跑完没人通知本进程，self.md 永远是启动那天的快照。
+        # 这里用「磁盘面板指纹」做兜底探测：文件变了就自动重载，不管谁改的。
+        self._panel_sig = None          # 当前内存快照对应的面板指纹
+        self._panel_probe_ts = 0.0      # 上次探测时间（节流）
+        self._panel_reload_ts = 0.0     # 上次自动重载时间（防抖）
         self._load_static()
 
     # ------------------------------------------------------------ 静态产物
@@ -387,6 +394,9 @@ class DataService:
     def load(self):
         try:
             t0 = time.time()
+            # 指纹必须在读文件**之前**取：若加载过程中文件又被改写，
+            # 指纹会落后于数据，下次探测发现不一致会再重载一次（保守方向，安全）。
+            sig = self._panel_fingerprint()
             md = qfdata.load_market(verbose=False)
             inp = qff.FactorInputs(md)
             self._model_cache = {}
@@ -401,6 +411,7 @@ class DataService:
             }
             with self.lock:
                 self.md, self.inp, self.model, self.derived = md, inp, res, derived
+                self._panel_sig = sig
                 self._recommend_cache.clear()
                 self._live_cache.clear()
                 self._fund_weekly = None
@@ -556,12 +567,69 @@ class DataService:
                 pass
         return md.T - 1
 
+    # ------------------------------------------------- 面板变更自愈（核心）
+    @staticmethod
+    def _panel_fingerprint():
+        """磁盘面板指纹（mtime + 体积）。用来判断服务内存快照是否落后于磁盘。
+
+        为什么用指纹而不是比较日期：命令行 `update_data.py`、`run_pipeline.py`
+        子进程、另一个终端跑的更新，全都不会通知本进程。只有磁盘是共同真相。
+        """
+        try:
+            st = C.PANEL_FILE.stat()
+            return (int(st.st_mtime), int(st.st_size))
+        except Exception:
+            return None
+
+    def _probe_panel_changed(self) -> bool:
+        """轻量探测：面板文件变了就丢一个后台重载。返回 True 表示"磁盘比内存新"。
+
+        节流 8 秒（一次 stat 而已，但避免每个请求都打穿磁盘）；
+        防抖 60 秒（重载要 20~30 秒，期间不能再起第二次）。
+        """
+        now = time.time()
+        # 用 getattr 兜底：测试和脚本会 DataService.__new__() 绕过 __init__，
+        # 少一个字段就 AttributeError 会把整条请求链路带崩（比"不重载"严重得多）。
+        if now - getattr(self, "_panel_probe_ts", 0.0) < 8.0:
+            return False
+        self._panel_probe_ts = now
+
+        sig = self._panel_fingerprint()
+        old = getattr(self, "_panel_sig", None)
+        if sig is None or old is None or sig == old:
+            return False
+
+        # 快照确实落后了
+        if (not getattr(self, "loading", False)
+                and not getattr(self, "reloading", False)
+                and now - getattr(self, "_panel_reload_ts", 0.0) > 60.0):
+            self._panel_reload_ts = now
+            threading.Thread(target=self._auto_reload, daemon=True,
+                             name="web-auto-reload").start()
+        return True
+
+    def _auto_reload(self):
+        try:
+            print("[web] 检测到行情面板已更新（外部写入），自动重载 ...", flush=True)
+            self.reload()
+            if self.md is not None:
+                print(f"[web] 自动重载完成：{self.md.T} 日 × {self.md.N} 只，"
+                      f"末交易日 {self.md.dates[-1].date()}", flush=True)
+        except Exception:
+            print("[web] 自动重载失败：\n" + traceback.format_exc(limit=3), flush=True)
+
     def _require_loaded(self):
         if not self.loaded:
             raise RuntimeError("数据加载中，请稍后" if self.loading else f"数据加载失败：{self.load_error}")
+        # 每个被 _require_loaded 保护的接口都顺带做一次新鲜度探测，
+        # 这样「更新完不重启服务也能自愈」，不依赖用户点对按钮。
+        self._probe_panel_changed()
 
     # ------------------------------------------------------------ meta
     def meta(self) -> dict:
+        # 页面几乎每次都会拉 meta，把它当"顺带体检"的入口最省事：
+        # 面板被别人改过就在这里发现并后台重载（节流 8 秒，开销一次 stat）。
+        self._probe_panel_changed()
         self._refresh_registry()
         out = {
             "app": "A股量化系统",
@@ -1315,6 +1383,8 @@ class DataService:
 
     # ------------------------------------------------------------ 数据更新
     def data_status(self) -> dict:
+        # 更新进行中前端会高频轮询这个接口；管道跑完那一秒正好靠它把服务唤醒。
+        self._probe_panel_changed()
         ext_info = _EXT / "UPDATE_INFO.txt"
         mtime = None
         if ext_info.exists():
@@ -2985,10 +3055,31 @@ class DataService:
             md = self.md
             if md is None:
                 return out
-            data_last = str(md.dates[-1].date())
-            out["data_last"] = data_last
+            mem_last = str(md.dates[-1].date())
+            data_last = mem_last
+            out["mem_last"] = mem_last
         except Exception:
             return out
+
+        # 0) 磁盘 vs 内存：谁更新？
+        #    点「开始更新」走 /api/pipeline/run，那是脱离的子进程，跑完不回来通知本服务。
+        #    以前这里只看内存，于是「更新成功 → 提示还在 → 再点一次 → 还在」，死循环。
+        #    磁盘才是真相：磁盘比内存新 = 服务该重载，不是用户该再更新一次。
+        try:
+            disk_last = self._last_date_of(C.DATA_RAW) or mem_last
+        except Exception:
+            disk_last = mem_last
+        if disk_last > mem_last:
+            out["data_last"] = disk_last
+            self._probe_panel_changed()      # 顺手丢一个后台重载
+            out.update({
+                "level": "warn", "kind": "server_stale",
+                "message": (f"行情已更新到 {disk_last}，网页服务还停在 {mem_last}。"
+                            f"正在自动重载（约 30 秒），稍后刷新即可，不用再点更新。"),
+                "action": "reload",
+            })
+            return out
+        out["data_last"] = data_last
 
         # 1) 数据 vs 今天：用交易日数（跳过周末）
         try:
@@ -3046,6 +3137,10 @@ class DataService:
         腿的构成由 `latest_combo.json` 决定（2026-11-05 起：主/低换手/宽基ETF/可转债）。
         """
         import json as _json
+
+        # 首页第一屏就是它：如果面板被外部更新过，这里就该开始自愈，
+        # 不能等用户去点「开始更新」（那正是死循环的起点）。
+        self._probe_panel_changed()
 
         combo_p = C.SIGNALS / "latest_combo.json"
         if not combo_p.exists():

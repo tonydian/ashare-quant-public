@@ -16,8 +16,8 @@
    "list_date": "2016-11-04"
   }
  },
- "rows": 3362,
+ "rows": 3363,
  "start": "2013-01-04",
- "end": "2026-11-10",
+ "end": "2026-11-11",
  "price_note": "close=qfq(前复权,含分红), raw_close=不复权, 收益率用 close 计算"
 }
