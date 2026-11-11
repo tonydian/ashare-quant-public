@@ -772,6 +772,147 @@ class DataService:
             },
         }
 
+    # ------------------------------------------------------------ 实时看盘
+    def _watch_codes(self) -> tuple[list[str], dict[str, str]]:
+        """当日四腿方案里要盯的代码。返回 (codes, {code: 腿标签})。"""
+        import json as _json
+
+        p = C.SIGNALS / "latest_combo.json"
+        if not p.exists():
+            return [], {}
+        try:
+            d = _json.load(open(p, encoding="utf-8"))
+        except Exception:
+            return [], {}
+
+        legs = (("main", "主策略", "targets"),
+                ("lowturn", "低换手", "legs"),
+                ("etf", "宽基ETF", "legs"),
+                ("cb", "可转债", "legs"))
+        codes: list[str] = []
+        tag: dict[str, str] = {}
+        for key, label, field in legs:
+            for it in (d.get(key) or {}).get(field) or []:
+                c = str(it.get("code") or "").strip()
+                if not c:
+                    continue
+                tag.setdefault(c, label)
+                if c not in codes:
+                    codes.append(c)
+        return codes, tag
+
+    def realtime_overview(self) -> dict:
+        """盘中实时层。**只用于看，不参与任何因子、打分、信号计算。**
+
+        与 market_overview 的分工：
+          - market_overview 读收盘面板，口径一致、可回测
+          - 本方法读公开实时接口，纯展示，绝不回流到因子或信号
+
+        个股「面板收盘」一律用 `md.raw_close`（不复权），因为实时价是不复权价；
+        `md.price` 是缩放后的绝对值，与实时价不可比，误用会得到荒谬的差异。
+        """
+        from qf import realtime as rt
+
+        self._probe_panel_changed()
+        codes, tag = self._watch_codes()
+        data = rt.overview(codes or None)
+
+        out = {
+            "asof": data.get("asof"),
+            "trading": bool(data.get("trading")),
+            "indices": data.get("indices"),
+            "breadth": data.get("breadth"),
+            "sectors": data.get("sectors"),
+            "panel_date": None,
+            "watch": [],
+            "alerts": [],
+            "n_watch": len(codes),
+            "warnings": [],
+        }
+        if not codes:
+            out["warnings"].append("未找到当日方案，只显示市场实时")
+            return out
+
+        quotes = data.get("quotes") or {}
+        if not quotes:
+            out["warnings"].append("实时行情接口未返回个股数据")
+            return out
+
+        md = self.md
+        if md is None:
+            out["warnings"].append("面板未加载，只显示实时价（无法对比收盘与 MA20）")
+            for c in codes:
+                q = quotes.get(c)
+                if not q:
+                    continue
+                out["watch"].append({
+                    "code": c, "name": q.get("name") or "", "leg": tag.get(c, ""),
+                    "last": round(q["last"], 2), "chg_pct": round(q["chg_pct"], 6),
+                    "panel_close": None, "ma20": None, "vs_panel": None,
+                    "below_ma20": None, "broke_ma20": False, "alerts": [],
+                })
+            return out
+
+        t = md.T - 1
+        out["panel_date"] = str(md.dates[t].date())
+        raw = md.raw_close
+        with np.errstate(invalid="ignore"):
+            ma20_t = np.nanmean(raw[max(0, t - 19):t + 1], axis=0)      # 含当日
+            ma20_p = np.nanmean(raw[max(0, t - 20):t], axis=0)          # 截至 T-1
+
+        for c in codes:
+            q = quotes.get(c)
+            if not q:
+                continue
+            item = {"code": c, "name": q.get("name") or "", "leg": tag.get(c, ""),
+                    "last": round(q["last"], 2), "chg_pct": round(q["chg_pct"], 6),
+                    "amount": q["amount"],
+                    "panel_close": None, "ma20": None, "vs_panel": None,
+                    "below_ma20": None, "broke_ma20": False, "alerts": []}
+
+            j = None
+            try:
+                j = md.code_index(c)
+            except Exception:
+                pass          # 转债不在股票面板里，只给实时价
+            if j is not None and 0 <= j < md.N:
+                pc = float(raw[t, j])
+                if np.isfinite(pc) and pc > 0:
+                    item["panel_close"] = round(pc, 2)
+                    item["vs_panel"] = round(q["last"] / pc - 1.0, 6)
+                m20 = float(ma20_t[j])
+                if np.isfinite(m20) and m20 > 0:
+                    item["ma20"] = round(m20, 2)
+                    item["below_ma20"] = bool(q["last"] < m20)
+                    # 真跌破：昨日收盘在 MA20 上方，今日落到下方。
+                    # 单看「现价 < MA20」在弱势市里 75% 的票都成立，没有信息量。
+                    m20p = float(ma20_p[j])
+                    pc_prev = float(raw[t - 1, j]) if t >= 1 else float("nan")
+                    if np.isfinite(m20p) and np.isfinite(pc_prev):
+                        item["broke_ma20"] = bool(pc_prev >= m20p and q["last"] < m20)
+
+            a = item["alerts"]
+            cp = item["chg_pct"]                  # 小数口径
+            if cp >= 0.05:
+                a.append("涨超5%")
+            elif cp <= -0.05:
+                a.append("跌超5%")
+            elif cp <= -0.03:
+                a.append("跌超3%")
+            if item["broke_ma20"]:
+                a.append("跌破MA20")
+            out["watch"].append(item)
+
+        out["watch"].sort(key=lambda x: abs(x["chg_pct"]), reverse=True)
+        out["alerts"] = [x for x in out["watch"] if x["alerts"]]
+        if len(out["watch"]) < len(codes):
+            missing = [c for c in codes if c not in quotes]
+            out["warnings"].append(
+                f"实时行情返回不全：{len(out['watch'])}/{len(codes)} 只"
+                + (f"（缺 {', '.join(missing[:5])}{' 等' if len(missing) > 5 else ''}）"
+                   if missing else "（多为停牌）"))
+        return out
+
     # ------------------------------------------------------------ 推荐
     def recommend(self, top: int = 60, asof: str | None = None, force: bool = False,
                   n_holdings: int = 40, model: str | None = None) -> dict:

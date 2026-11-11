@@ -2104,3 +2104,47 @@ details.fold.card .plain-list { margin: 0; }
   fill: color-mix(in srgb, var(--accent-2) 14%, transparent);
   stroke: none;
 }
+
+/* ---------- 盘中实时（mmarket 页顶部） */
+.rt-card { margin-bottom: 14px; }
+.rt-row-idx {
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px; margin-bottom: 15px;
+}
+.rt-idx {
+  background: var(--surface-2); border-radius: var(--r-md);
+  padding: 9px 11px 10px;
+}
+.rt-idx .nm { font-size: 11.5px; color: var(--text-3); margin-bottom: 3px; }
+.rt-idx .px { font-size: 15px; font-family: var(--font-mono); font-weight: 500; line-height: 1.25; }
+.rt-idx .cg { font-size: 11.5px; font-family: var(--font-mono); }
+.rt-idx .px.up, .rt-idx .cg.up { color: var(--up); }
+.rt-idx .px.down, .rt-idx .cg.down { color: var(--down); }
+.rt-cols { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 18px; }
+.rt-h {
+  font-size: 11.5px; color: var(--text-3); margin-bottom: 7px;
+  display: flex; justify-content: space-between; gap: 8px;
+}
+.rt-item {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  padding: 4px 0; font-size: 12.5px; border-bottom: 1px solid var(--line);
+}
+.rt-item:last-child { border-bottom: none; }
+.rt-item .l { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rt-item .r { font-family: var(--font-mono); flex: 0 0 auto; }
+.rt-item .r.up { color: var(--up); }
+.rt-item .r.down { color: var(--down); }
+.rt-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 7px 0 9px; gap: 1px; }
+.rt-bar i { display: block; height: 100%; }
+.rt-tag {
+  display: inline-block; font-size: 10.5px; padding: 1px 5px; line-height: 1.5;
+  border-radius: 4px; margin-left: 4px; vertical-align: 1px;
+}
+.rt-tag.bad { color: var(--down); background: var(--down-soft); }
+.rt-tag.warn { color: var(--warn); background: var(--warn-soft); }
+.rt-tag.mute { color: var(--text-3); background: var(--surface-3); }
+.rt-note { font-size: 11px; color: var(--text-3); margin-top: 12px; line-height: 1.6; }
+@media (max-width: 1100px) {
+  .rt-row-idx { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .rt-cols { grid-template-columns: 1fr; gap: 14px; }
+}

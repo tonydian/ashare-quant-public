@@ -120,6 +120,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.svc.meta())
             if path == "/api/market/overview":
                 return self._json(self.svc.market_overview(asof=q.get("asof"), bench=q.get("bench", "csi_all")))
+            if path == "/api/realtime/overview":
+                return self._json(self.svc.realtime_overview())
             if path == "/api/recommend":
                 top = int(q.get("top", 60))
                 return self._json(self.svc.public_recommend(

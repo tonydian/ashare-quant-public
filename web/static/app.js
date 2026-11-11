@@ -55,6 +55,7 @@
     stockLoadSeq: 0,
     stockRetry: 0,
     monthly: null,
+    realtime: null,
     suggestSeq: 0,
     suggestTimer: null,
     suggest: [],
@@ -683,6 +684,130 @@
     setHtml('industryTable', renderIndustries(d.industries));
     renderTicker(d);
     drawIndexChart();
+    loadRealtime();          // 独立异步：实时接口慢（涨跌家数要二分查全市场），不阻塞收盘数据
+  }
+
+  // ---- 盘中实时层。只用于看盘，不参与任何因子、打分、信号计算 ----
+  function rtRow(label, val, cls) {
+    return '<div class="rt-item"><span class="l">' + esc(label) + '</span>' +
+      '<span class="r ' + (cls || '') + '">' + val + '</span></div>';
+  }
+
+  function loadRealtime(force) {
+    if (!byId('rtBody')) return;
+    if (state.realtime && !force) return;
+    setHtml('rtBody', '<div class="empty-block">正在获取实时行情…（涨跌家数需二分查全市场，首次约 5~8 秒）</div>');
+    apiFetch('/api/realtime/overview').then(function (d) {
+      state.realtime = d || {};
+      renderRealtime(state.realtime);
+    }).catch(function (err) {
+      setText('rtStamp', '实时源不可用');
+      setHtml('rtBody', '<div class="empty-block">实时行情暂不可用（' + esc(err.message) +
+        '）。下面的收盘数据不受影响。</div>');
+    });
+  }
+
+  function yi(x) {
+    var v = toNum(x);
+    return v >= 1e8 ? (v / 1e8).toFixed(0) + ' 亿' : (v / 1e4).toFixed(0) + ' 万';
+  }
+
+  function renderRealtime(d) {
+    d = d || {};
+    var st = [];
+    if (d.asof) st.push('抓取 ' + String(d.asof).slice(11, 16));
+    st.push(d.trading ? '盘中' : '非交易时段');
+    if (d.panel_date) st.push('面板收盘 ' + d.panel_date);
+    setText('rtStamp', st.join(' · '));
+
+    var h = '';
+
+    if (d.indices && d.indices.length) {
+      h += '<div class="rt-row-idx">';
+      d.indices.forEach(function (x) {
+        var cls = pctClass(x.chg_pct);
+        h += '<div class="rt-idx"><div class="nm">' + esc(x.name) + '</div>' +
+          '<div class="px ' + cls + '">' + fmtNum(x.last, 2) + '</div>' +
+          '<div class="cg ' + cls + '">' + fmtPct(x.chg_pct) + ' · ' + yi(x.amount) + '</div></div>';
+      });
+      h += '</div>';
+    }
+
+    h += '<div class="rt-cols">';
+
+    // 涨跌家数
+    h += '<div><div class="rt-h"><span>涨跌家数</span><span>全市场 · 含域外</span></div>';
+    var b = d.breadth;
+    if (b) {
+      var tot = (toNum(b.up) + toNum(b.down) + toNum(b.flat)) || 1;
+      h += '<div class="rt-bar">' +
+        '<i style="width:' + (b.up / tot * 100).toFixed(1) + '%;background:var(--up)"></i>' +
+        '<i style="width:' + (b.flat / tot * 100).toFixed(1) + '%;background:var(--text-3);opacity:.45"></i>' +
+        '<i style="width:' + (b.down / tot * 100).toFixed(1) + '%;background:var(--down)"></i></div>';
+      h += rtRow('上涨', fmtInt(b.up), 'up');
+      h += rtRow('下跌', fmtInt(b.down), 'down');
+      h += rtRow('平盘', fmtInt(b.flat), '');
+      if (b.limit_up != null) {
+        h += rtRow('涨停 / 跌停',
+          '<span class="up">' + fmtInt(b.limit_up) + '</span> / <span class="down">' +
+          fmtInt(b.limit_down || 0) + '</span>', '');
+      }
+      if (b.max_streak) {
+        h += rtRow('最高连板', b.max_streak + ' 板' +
+          (b.top_streak ? ' · ' + esc(b.top_streak.name) : ''), '');
+      }
+    } else {
+      h += '<div class="muted small">暂不可用（数据源未返回）</div>';
+    }
+    h += '</div>';
+
+    // 板块实时
+    h += '<div><div class="rt-h"><span>板块实时涨幅</span><span>前 ' + ((d.sectors || []).length || 0) + '</span></div>';
+    var secs = d.sectors || [];
+    if (secs.length) {
+      secs.forEach(function (x) {
+        h += '<div class="rt-item"><span class="l">' + esc(x.name) +
+          (x.leader ? ' <span class="muted" style="font-size:11px">' + esc(x.leader) +
+            ' <span class="' + pctClass(x.leader_chg) + '">' + fmtPct(x.leader_chg) + '</span></span>' : '') +
+          '</span><span class="r ' + pctClass(x.chg_pct) + '">' + fmtPct(x.chg_pct) + '</span></div>';
+      });
+    } else {
+      h += '<div class="muted small">暂不可用（数据源未返回）</div>';
+    }
+    h += '</div>';
+
+    // 名单异动
+    var al = d.alerts || [];
+    h += '<div><div class="rt-h"><span>名单异动</span><span>' + al.length + ' / ' + (d.n_watch || 0) + ' 只</span></div>';
+    if (al.length) {
+      al.slice(0, 12).forEach(function (x) {
+        var tags = '';
+        (x.alerts || []).forEach(function (t) {
+          tags += '<span class="rt-tag ' + (/跌破|跌/.test(t) ? 'bad' : 'warn') + '">' + esc(t) + '</span>';
+        });
+        h += '<div class="rt-item"><span class="l">' + esc(x.name) +
+          ' <span class="muted" style="font-size:11px">' + esc(x.code) + '</span>' + tags +
+          '</span><span class="r ' + pctClass(x.chg_pct) + '">' + fmtPct(x.chg_pct) + '</span></div>';
+      });
+      if (al.length > 12) {
+        h += '<div class="rt-item"><span class="l muted">还有 ' + (al.length - 12) + ' 只</span><span class="r"></span></div>';
+      }
+    } else {
+      h += '<div class="muted small">名单内无触发异动的个股</div>';
+    }
+    h += '</div>';
+
+    h += '</div>';   // rt-cols
+
+    if (d.warnings && d.warnings.length) {
+      h += '<div class="rt-note" style="color:var(--warn)">' + d.warnings.map(esc).join('；') + '</div>';
+    }
+    h += '<div class="rt-note">口径提醒：这里的涨跌家数是<b>全市场</b>（含选股域外的股票），' +
+      '页顶 ticker 与下方「市场宽度」是<b>选股域内</b>口径，两者数字不同属正常，不能直接对比。' +
+      '实时价与面板收盘来自不同数据源，差 0.2~0.4% 也属正常口径差。' +
+      '本区块只用于盘中看盘，<b>不参与任何因子、打分、信号计算</b>。</div>';
+
+    setHtml('rtBody', h);
   }
 
   function renderIndices(list) {
@@ -1965,6 +2090,7 @@
     if (refresh) refresh.addEventListener('click', refreshCurrent);
     document.addEventListener('click', function (e) {
       if (!e.target.closest) return;
+      if (e.target.closest('#rtRefreshBtn')) { loadRealtime(true); return; }
       var retry = e.target.closest('[data-retry]');
       if (retry) {
         var page = retry.getAttribute('data-retry');
