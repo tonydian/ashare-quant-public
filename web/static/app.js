@@ -53,6 +53,7 @@
     stock: null,
     stockCode: null,
     stockLoadSeq: 0,
+    stockRetry: 0,
     monthly: null,
     suggestSeq: 0,
     suggestTimer: null,
@@ -1393,9 +1394,29 @@
     });
   }
 
+  // 自动重试上限：3s 起、逐步拉长到 8s，合计约 2 分钟。
+  // 超过就停下来给一个可点的「重试」，而不是无限转圈（无限转圈会让人以为卡死）。
+  var STOCK_MAX_RETRY = 20;
+
+  /**
+   * 个股页的可重试错误 = 服务还没就绪（503）+ 连不上/超时（服务正在重启）。
+   * 后者以前会直接甩一个红框「无法连接后端服务」，用户看到的是一次重启留下的
+   * 永久报错；实际上再等十几秒就恢复了，所以这里一并当作"稍后重试"。
+   */
+  function isTransientStockError(err) {
+    if (isServiceLoading(err)) return true;
+    return /无法连接后端服务|请求超时|Failed to fetch|NetworkError/i
+      .test(String((err && err.message) || ''));
+  }
+
   function loadStock(code, force) {
     if (!code) return;
     var seq = ++state.stockLoadSeq;
+    // 立刻记住要加载的代码。以前只在成功后才写 state.stockCode，
+    // 于是「第一次就失败」的情况下：切走再切回个股页 → initStockPage 什么都不做
+    // → 「正在准备数据」这句永久留在页面上。这是它反复出现的真正原因。
+    state.stockCode = code;
+    if (!force) state.stockRetry = 0;
     setHtml('stockDetail', '<div class="card"><div class="card-bd">' +
       loadingBlock('正在加载 ' + code + ' 详情…') + '</div></div>');
     var curModel = state.analysisModel || state.defaultModel || 'wf_h10';
@@ -1404,6 +1425,7 @@
       if (!d || !d.code) throw new Error('接口未返回个股数据');
       state.stock = d;
       state.stockCode = d.code;
+      state.stockRetry = 0;
       state.loaded.stock = true;
       renderStock(d);
       var input = byId('stockSearchInput');
@@ -1411,24 +1433,57 @@
       markOk();
     }).catch(function (err) {
       if (seq !== state.stockLoadSeq) return;
-      if (isServiceLoading(err)) {
-        setHtml('stockDetail', '<div class="card"><div class="card-bd">' +
-          '<div class="empty-block">正在准备数据（服务刚启动时首次需约 1 分钟，之后秒开），' +
-          '稍候自动重试…</div></div></div>');
+      state.stock = null;
+      if (isTransientStockError(err)) {
+        renderStockWaiting(code, err);
         timeoutRetryStock(code, seq);
         return;
       }
       setHtml('stockDetail', '<div class="card"><div class="card-bd"><div class="error-box" style="margin:0">' +
-        '<b>加载失败：</b>' + esc(err.message) + '</div></div></div>');
+        '<b>加载失败：</b>' + esc(err.message) + '</div>' +
+        '<div style="margin-top:10px">' +
+        '<button class="btn btn-sm" data-retry="stock">重试</button></div></div></div>');
       toast('个股数据加载失败：' + err.message, 'error');
       markDegraded();
     });
   }
 
+  /** 服务还没就绪时的等待态：说清在等什么、第几次重试、以及后端原话 */
+  function renderStockWaiting(code, err) {
+    var n = state.stockRetry || 0;
+    var why = String((err && err.message) || '');
+    var offline = /无法连接后端服务|请求超时|Failed to fetch|NetworkError/i.test(why);
+    var head = offline
+      ? '后端服务暂时连不上（多半正在重启，一般 1 分钟内起来），正在等它恢复'
+      : ('正在准备 ' + esc(code) + ' 的数据（服务刚启动时要先把全市场打分算完，' +
+         '约 1~2 分钟；之后秒开）');
+    setHtml('stockDetail', '<div class="card"><div class="card-bd">' +
+      '<div class="empty-block"><span class="spinner"></span> ' + head +
+      (n ? '，第 ' + n + ' 次自动重试' : '') + '…</div>' +
+      '<div class="muted" style="font-size:12px;margin-top:8px">' +
+      '超过 2 分钟还停在这句，就点下面的按钮重试；后端原话：' + esc(why) + '</div>' +
+      '<div style="margin-top:10px">' +
+      '<button class="btn btn-sm" data-retry="stock">立即重试</button></div>' +
+      '</div></div>');
+  }
+
   function timeoutRetryStock(code, seq) {
+    state.stockRetry = (state.stockRetry || 0) + 1;
+    if (state.stockRetry > STOCK_MAX_RETRY) {
+      setHtml('stockDetail', '<div class="card"><div class="card-bd"><div class="error-box" style="margin:0">' +
+        '<b>' + esc(code) + ' 连续 ' + STOCK_MAX_RETRY + ' 次没取到数据。</b><br>' +
+        '通常是后端刚重启（约 1 分钟）或这个代码当前不可用。点「重试」再拉一次。</div>' +
+        '<div style="margin-top:10px">' +
+        '<button class="btn btn-sm" data-retry="stock">重试</button></div></div></div>');
+      return;
+    }
+    var delay = Math.min(3000 + 500 * (state.stockRetry - 1), 8000);
     setTimeout(function () {
-      if (seq === state.stockLoadSeq && state.activePage === 'stock') loadStock(code);
-    }, 3000);
+      // 不再要求 activePage === 'stock'：用户切到别的页也该把数据拉好。
+      // seq 变了说明有更新的请求，本次静默作废即可。
+      if (seq !== state.stockLoadSeq) return;
+      loadStock(code, true);
+    }, delay);
   }
 
   function renderStock(d) {
@@ -1861,10 +1916,24 @@
   }
 
   function initStockPage() {
-    state.loaded.stock = true;
     var input = byId('stockSearchInput');
     if (input && state.stock) input.value = state.stock.code + ' ' + (state.stock.name || '');
-    if (state.stock && byId('stockDetail') && !byId('stockDetail').querySelector('.card')) renderStock(state.stock);
+    var box = byId('stockDetail');
+    var hasCard = !!(box && box.querySelector('.card'));
+
+    // 已有数据 → 只在被清空时补画（不重复请求）
+    if (state.stock) {
+      if (!hasCard) renderStock(state.stock);
+      return;
+    }
+    // 没有数据但记得代码（上次失败/被打断）→ 重新拉，别让占位提示留在页面上
+    if (state.stockCode) { loadStock(state.stockCode); return; }
+    // 全新进入且还没搜过 → 给明确指引，而不是空白
+    if (!hasCard) {
+      setHtml('stockDetail', '<div class="card"><div class="card-bd">' +
+        '<div class="empty-block">在右上角搜索框输入股票代码或名称（如 600519），' +
+        '或从「今日推荐」点任意一只股票进入。</div></div></div>');
+    }
   }
 
   function reloadPage(name) {
@@ -1880,7 +1949,7 @@
       initBacktestPage();
       if (state.bt.result) renderBtResult(state.bt.result, state.bt.jobId);
     } else if (name === 'stock') {
-      if (state.stockCode) loadStock(state.stockCode, true);
+      if (state.stockCode) loadStock(state.stockCode);   // 不带 force → 重置重试计数
       else initStockPage();
     } else {
       ensurePage(name, true);
